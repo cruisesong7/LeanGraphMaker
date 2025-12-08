@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Graph Drawer (House of Graphs-like)</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.04), transparent 25%),
+                  radial-gradient(circle at 80% 0%, rgba(255, 255, 255, 0.05), transparent 22%),
+                  #0f172a;
+    }
+    header {
+      padding: 12px 16px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 18px;
+      letter-spacing: 0.2px;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button {
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border 120ms ease, transform 120ms ease, background 120ms ease;
+    }
+    button:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.12);
+    }
+    button:active {
+      transform: translateY(1px);
+    }
+    button.primary {
+      background: linear-gradient(135deg, #22d3ee, #6366f1);
+      color: #0b1224;
+      border: none;
+      font-weight: 600;
+    }
+    button.danger {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.35);
+      color: #fecdd3;
+    }
+    .badge {
+      padding: 4px 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    #canvas {
+      flex: 1;
+      background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 60%),
+                  #0b1224;
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+    .bottom-panel {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      padding: 12px 16px 16px;
+      background: rgba(10, 14, 26, 0.85);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      color: inherit;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+    }
+    .hint {
+      font-size: 12px;
+      color: #cbd5e1;
+      opacity: 0.85;
+    }
+    .flex-between {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Graph Drawer — simple undirected graphs (graph6 / edge list / adjacency)</h1>
+    <div class="controls">
+      <span class="badge" id="nodeCount">Nodes: 0</span>
+      <span class="badge" id="edgeCount">Edges: 0</span>
+      <button id="clearSelection">Clear selection</button>
+      <button id="clearGraph" class="danger">Clear graph</button>
+      <button id="exportG6" class="primary">Export graph6</button>
+      <button id="exportEdges">Export edge list</button>
+      <button id="exportAdj">Export adjacency matrix</button>
+      <button id="copyOutput">Copy export</button>
+    </div>
+  </header>
+
+  <canvas id="canvas"></canvas>
+
+  <div class="bottom-panel">
+    <div class="flex-between">
+      <div class="hint">
+        Click empty space to add a node. Click two nodes in a row to toggle an undirected edge.
+        Drag a node to reposition. Right-click a node to delete it.
+      </div>
+      <span class="badge" id="status">Ready</span>
+    </div>
+    <textarea id="output" placeholder="Exported data will appear here..." readonly></textarea>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const nodeCountEl = document.getElementById("nodeCount");
+    const edgeCountEl = document.getElementById("edgeCount");
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+
+    const nodes = []; // { id, x, y }
+    const edges = new Set(); // store "a-b" with a < b
+
+    let selectedNodeId = null;
+    let draggingNodeId = null;
+    let dragOffset = { x: 0, y: 0 };
+    let dragStart = { x: 0, y: 0 };
+    let isDragging = false;
+    let nextId = 0;
+
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+      draw();
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function updateBadges() {
+      nodeCountEl.textContent = `Nodes: ${nodes.length}`;
+      edgeCountEl.textContent = `Edges: ${edges.size}`;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      // draw edges
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(94, 234, 212, 0.7)";
+      edges.forEach(key => {
+        const [a, b] = key.split("-").map(Number);
+        const na = nodes.find(n => n.id === a);
+        const nb = nodes.find(n => n.id === b);
+        if (!na || !nb) return;
+        ctx.beginPath();
+        ctx.moveTo(na.x, na.y);
+        ctx.lineTo(nb.x, nb.y);
+        ctx.stroke();
+      });
+
+      // draw nodes
+      nodes.forEach((node, index) => {
+        const radius = 16;
+        const isSelected = node.id === selectedNodeId;
+        const gradient = ctx.createRadialGradient(
+          node.x - 6,
+          node.y - 6,
+          4,
+          node.x,
+          node.y,
+          radius + 2
+        );
+        gradient.addColorStop(0, isSelected ? "#a5b4fc" : "#34d399");
+        gradient.addColorStop(1, isSelected ? "#6366f1" : "#10b981");
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = isSelected ? "#fef9c3" : "rgba(255,255,255,0.6)";
+        ctx.stroke();
+
+        ctx.fillStyle = "#0b1224";
+        ctx.font = "bold 13px 'Inter', system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(index, node.x, node.y);
+      });
+      ctx.restore();
+    }
+
+    function addNode(x, y) {
+      nodes.push({ id: nextId++, x, y });
+      setStatus("Node added");
+      updateBadges();
+      draw();
+    }
+
+    function findNodeAt(x, y) {
+      const radius = 18;
+      return nodes.find(node => {
+        const dx = node.x - x;
+        const dy = node.y - y;
+        return Math.hypot(dx, dy) <= radius;
+      });
+    }
+
+    function toggleEdge(aId, bId) {
+      if (aId === bId) return;
+      const [u, v] = aId < bId ? [aId, bId] : [bId, aId];
+      const key = `${u}-${v}`;
+      if (edges.has(key)) {
+        edges.delete(key);
+        setStatus(`Edge ${u}-${v} removed`);
+      } else {
+        edges.add(key);
+        setStatus(`Edge ${u}-${v} added`);
+      }
+      updateBadges();
+      draw();
+    }
+
+    function deleteNode(nodeId) {
+      const idx = nodes.findIndex(n => n.id === nodeId);
+      if (idx === -1) return;
+      nodes.splice(idx, 1);
+      // remove incident edges
+      Array.from(edges).forEach(key => {
+        const [a, b] = key.split("-").map(Number);
+        if (a === nodeId || b === nodeId) edges.delete(key);
+      });
+      selectedNodeId = selectedNodeId === nodeId ? null : selectedNodeId;
+      setStatus(`Node ${nodeId} deleted`);
+      updateBadges();
+      draw();
+    }
+
+    // Canvas events
+    canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+    canvas.addEventListener("mousedown", e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const node = findNodeAt(x, y);
+      if (e.button === 2) {
+        if (node) deleteNode(node.id);
+        return;
+      }
+      if (node) {
+        draggingNodeId = node.id;
+        dragOffset.x = node.x - x;
+        dragOffset.y = node.y - y;
+        dragStart.x = x;
+        dragStart.y = y;
+        isDragging = false;
+      }
+    });
+
+    canvas.addEventListener("mousemove", e => {
+      if (draggingNodeId === null) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const node = nodes.find(n => n.id === draggingNodeId);
+      if (!node) return;
+
+      const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
+      if (moved) isDragging = true;
+      if (!isDragging) return;
+
+      node.x = x + dragOffset.x;
+      node.y = y + dragOffset.y;
+      draw();
+    });
+
+    canvas.addEventListener("mouseup", e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const node = findNodeAt(x, y);
+
+      if (draggingNodeId !== null && isDragging) {
+        isDragging = false;
+        draggingNodeId = null;
+        return;
+      }
+
+      if (node) {
+        if (selectedNodeId === null) {
+          selectedNodeId = node.id;
+          setStatus(`Selected node ${node.id}`);
+        } else {
+          toggleEdge(selectedNodeId, node.id);
+          selectedNodeId = null;
+        }
+      } else {
+        addNode(x, y);
+        selectedNodeId = null;
+      }
+
+      isDragging = false;
+      draggingNodeId = null;
+      draw();
+    });
+
+    canvas.addEventListener("mouseleave", () => {
+      isDragging = false;
+      draggingNodeId = null;
+    });
+
+    // Export helpers
+    function toEdgeList() {
+      if (nodes.length === 0) return "";
+      const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
+      const lines = [];
+      edges.forEach(key => {
+        const [a, b] = key.split("-").map(Number);
+        lines.push(`${idToIndex.get(a)} ${idToIndex.get(b)}`);
+      });
+      return lines.join("\n");
+    }
+
+    function toAdjacencyMatrix() {
+      const n = nodes.length;
+      const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
+      const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+      edges.forEach(key => {
+        const [a, b] = key.split("-").map(Number);
+        const i = idToIndex.get(a);
+        const j = idToIndex.get(b);
+        if (i === undefined || j === undefined) return;
+        matrix[i][j] = 1;
+        matrix[j][i] = 1;
+      });
+      return matrix.map(row => row.join(" ")).join("\n");
+    }
+
+    function toGraph6() {
+      const n = nodes.length;
+      const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
+      if (n === 0) return "?";
+      if (n > 62) {
+        alert("graph6 export in this demo supports up to 62 vertices.");
+        return "";
+      }
+      const header = String.fromCharCode(n + 63);
+      const bits = [];
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const key =
+            (nodes[i].id < nodes[j].id)
+              ? `${nodes[i].id}-${nodes[j].id}`
+              : `${nodes[j].id}-${nodes[i].id}`;
+          bits.push(edges.has(key) ? 1 : 0);
+        }
+      }
+      while (bits.length % 6 !== 0) bits.push(0);
+      let payload = "";
+      for (let i = 0; i < bits.length; i += 6) {
+        const chunk = bits.slice(i, i + 6).reduce((acc, b) => (acc << 1) | b, 0);
+        payload += String.fromCharCode(chunk + 63);
+      }
+      return header + payload;
+    }
+
+    function setOutput(text, label) {
+      outputEl.value = text;
+      setStatus(label);
+    }
+
+    // Buttons
+    document.getElementById("clearSelection").addEventListener("click", () => {
+      selectedNodeId = null;
+      setStatus("Selection cleared");
+      draw();
+    });
+
+    document.getElementById("clearGraph").addEventListener("click", () => {
+      nodes.length = 0;
+      edges.clear();
+      selectedNodeId = null;
+      nextId = 0;
+      updateBadges();
+      setStatus("Graph cleared");
+      draw();
+      outputEl.value = "";
+    });
+
+    document.getElementById("exportG6").addEventListener("click", () => {
+      const text = toGraph6();
+      setOutput(text, "graph6 exported");
+    });
+
+    document.getElementById("exportEdges").addEventListener("click", () => {
+      const text = toEdgeList();
+      setOutput(text, "Edge list exported");
+    });
+
+    document.getElementById("exportAdj").addEventListener("click", () => {
+      const text = toAdjacencyMatrix();
+      setOutput(text, "Adjacency matrix exported");
+    });
+
+    document.getElementById("copyOutput").addEventListener("click", async () => {
+      if (!outputEl.value) {
+        setStatus("Nothing to copy");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(outputEl.value);
+        setStatus("Copied to clipboard");
+      } catch (err) {
+        setStatus("Clipboard unavailable — copy manually");
+      }
+    });
+
+    updateBadges();
+    draw();
+  </script>
+</body>
+</html>
