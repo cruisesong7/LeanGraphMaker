@@ -24,33 +24,65 @@ def incrementCounter : CounterWidgetProps → RequestM (RequestTask CounterWidge
 
 open scoped Jsx in
 @[server_rpc_method]
-def counterWidget.rpc (props : CounterWidgetProps) : RequestM (RequestTask Html) :=
+def counterWidget.editLinkPropsRpc (props : CounterWidgetProps) : RequestM (RequestTask MakeEditLinkProps) :=
   RequestM.asTask do
     let doc : FileWorker.EditableDocument ← RequestM.readDoc
-    let inner : Html ← (do return (
-      Html.ofComponent
-      MakeEditLink
-      (.ofReplaceRange doc.meta props.replaceRange s!"{props.count}")
-      #[ .text s!"{props.count}" ])
-    )
-    return <details «open»={true}>
-      <summary className="mv2 pointer">Hello </summary>
-      <div className="ml1">{inner}</div>
-    </details>
+    let editLinkProps : MakeEditLinkProps := .ofReplaceRange doc.meta props.replaceRange s!"{props.count}"
+    return editLinkProps
+
+/-
+
+import * as React from 'react'
+import { EditorContext } from '@leanprover/infoview'
+import { Range, TextDocumentEdit } from 'vscode-languageserver-protocol'
+
+interface MakeEditLinkProps {
+  edit : TextDocumentEdit
+  newSelection? : Range
+  title? : string
+}
+
+export default function(props: React.PropsWithChildren<MakeEditLinkProps>) {
+  const ec = React.useContext(EditorContext)
+
+  return <a className='link pointer dim ' title={props.title ?? ''}
+      onClick={async () => {
+        await ec.api.applyEdit({ documentChanges: [props.edit] })
+        // TODO: https://github.com/leanprover/vscode-lean4/issues/225
+        if (props.newSelection)
+          await ec.revealLocation({ uri: props.edit.textDocument.uri, range: props.newSelection })
+      }}
+    >
+      {props.children}
+    </a>
+}
+
+-/
 
 /-- React component that displays a button and current count. -/
 @[widget_module]
 def counterWidget : Component CounterWidgetProps where
   javascript := "
-    import { RpcContext, mapRpcError } from '@leanprover/infoview'
+    import { RpcContext, EditorContext, mapRpcError } from '@leanprover/infoview'
     import * as React from 'react';
     const e = React.createElement;
 
     export default function(props) {
+      const rs = React.useContext(RpcContext);
+      const ec = React.useContext(EditorContext)
+
       const [count, setCount] = React.useState(props.count);
       const [range, _] = React.useState(props.replaceRange);
-      const rs = React.useContext(RpcContext);
-      const html = rs.call('counterWidget.rpc', { count: count, replaceRange: range }).then()
+      const editLinkPropsPromise = rs.call('counterWidget.editLinkPropsRpc', { count: count, replaceRange: range });
+      const link =
+        <a className='link pointer dim ' title={title ?? ''}
+          onClick={async () => editLinkPropsPromise.then(editLinkProps => {
+            await ec.api.applyEdit({ documentChanges: [editLinkProps.edit] })
+            if (editLinkProps.newSelection)
+              await ec.revealLocation({ uri: editLinkProps.edit.textDocument.uri, range: editLinkProps.newSelection })
+          })}
+        >
+        </a>
 
       return e('div', {}, [
         e('button', {
@@ -61,9 +93,6 @@ def counterWidget : Component CounterWidgetProps where
           }
         }, 'Click me!'),
         e('span', { style: { marginLeft: '10px' } }, `Count: ${count}`),
-        e('span', { style: { marginLeft: '10px' } },
-          `HTML: ${html})`)
-        // rs.call('counterWidget.rpc', { count: count, replaceRange: range })
       ])
     }
   "
