@@ -65,6 +65,7 @@ def counterWidget : Component CounterWidgetProps where
   javascript := "
     import { RpcContext, EditorContext, mapRpcError } from '@leanprover/infoview'
     import * as React from 'react';
+
     const e = React.createElement;
 
     export default function(props) {
@@ -74,15 +75,12 @@ def counterWidget : Component CounterWidgetProps where
       const [count, setCount] = React.useState(props.count);
       const [range, _] = React.useState(props.replaceRange);
       const editLinkPropsPromise = rs.call('counterWidget.editLinkPropsRpc', { count: count, replaceRange: range });
-      const link =
-        <a className='link pointer dim ' title={title ?? ''}
-          onClick={async () => editLinkPropsPromise.then(editLinkProps => {
-            await ec.api.applyEdit({ documentChanges: [editLinkProps.edit] })
-            if (editLinkProps.newSelection)
-              await ec.revealLocation({ uri: editLinkProps.edit.textDocument.uri, range: editLinkProps.newSelection })
-          })}
-        >
-        </a>
+      const linkOnClick =
+        () => editLinkPropsPromise.then(editLinkProps => {
+          ec.api.applyEdit({ documentChanges: [editLinkProps.edit] })
+          if (editLinkProps.newSelection)
+            ec.revealLocation({ uri: editLinkProps.edit.textDocument.uri, range: editLinkProps.newSelection })
+        });
 
       return e('div', {}, [
         e('button', {
@@ -93,6 +91,7 @@ def counterWidget : Component CounterWidgetProps where
           }
         }, 'Click me!'),
         e('span', { style: { marginLeft: '10px' } }, `Count: ${count}`),
+        e('a', { className: 'link pointer dim', onClick: linkOnClick }, 'hello')
       ])
     }
   "
