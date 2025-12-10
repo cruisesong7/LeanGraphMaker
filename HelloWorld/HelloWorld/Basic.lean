@@ -91,7 +91,9 @@ def counterWidget : Component CounterWidgetProps where
           }
         }, 'Click me!'),
         e('span', { style: { marginLeft: '10px' } }, `Count: ${count}`),
-        e('a', { className: 'link pointer dim', onClick: linkOnClick }, 'hello')
+        e('br'),
+        e('br'),
+        e('a', { className: 'link pointer dim', onClick: linkOnClick }, 'Insert counter')
       ])
     }
   "
