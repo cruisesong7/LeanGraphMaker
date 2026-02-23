@@ -721,8 +721,9 @@ export default function(props) {
    */
   const sendToLean = () => {
     setStatus("Sending to Lean...");
-    rs.call('graphWidget.updateGraph', { 
-      graph6: graph6String, 
+    rs.call('graphWidget.editLinkPropsRpc', { 
+      // graph6: graph6String, 
+      count: 1,
       replaceRange: range 
     })
     .then(result => {
@@ -919,19 +920,10 @@ export default function(props) {
         marginBottom: '8px'
       } }, 'Click empty space to add a node. Click two nodes to toggle edge. Drag to reposition. Right-click to delete.'),
       e('div', { style: { display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' } }, [
-        e('button', {
-          onClick: sendToLean,
-          style: {
-            background: 'linear-gradient(135deg, #22d3ee, #6366f1)',
-            color: '#0b1224',
-            border: 'none',
-            padding: '8px 16px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: '600',
-            fontSize: '13px'
-          }
-        }, '📤 Send to Lean'),
+        e('a', {
+          className: 'link pointer dim',
+          onClick: sendToLean
+        }, 'Insert Graph'),
         e('button', {
           onClick: () => {
             navigator.clipboard.writeText(graph6String);

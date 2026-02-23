@@ -1,0 +1,9 @@
+TODO:
+- Look into Lean game server
+- Integrate Brian's graph TS app into Lean
+- Integrate existing graph visualization into interactive TS app
+
+Examples:
+- Ramsay, of course
+- Neat combinatorics proofs
+- Famous graphs

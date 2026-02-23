@@ -9,29 +9,29 @@ open ProofWidgets
 open Lean Meta Server Elab Tactic
 
 /-- Props for the counter widget containing the current count. -/
-structure CounterWidgetProps where
+structure GraphWidgetProps where
   count : Nat
   replaceRange : Lsp.Range
   deriving Server.RpcEncodable
 
-/-- RPC method that increments the counter and returns the new count. -/
+/- RPC method that increments the counter and returns the new count.
 @[server_rpc_method]
 def incrementCounter : CounterWidgetProps → RequestM (RequestTask CounterWidgetProps)
   | props =>
     RequestM.asTask (
       do return { count := props.count + 1, replaceRange := props.replaceRange }
     )
+-/
 
 open scoped Jsx in
 @[server_rpc_method]
-def counterWidget.editLinkPropsRpc (props : CounterWidgetProps) : RequestM (RequestTask MakeEditLinkProps) :=
+def graphWidget.editLinkPropsRpc (props : GraphWidgetProps) : RequestM (RequestTask MakeEditLinkProps) :=
   RequestM.asTask do
     let doc : FileWorker.EditableDocument ← RequestM.readDoc
     let editLinkProps : MakeEditLinkProps := .ofReplaceRange doc.meta props.replaceRange s!"{props.count}"
     return editLinkProps
 
 /-
-
 import * as React from 'react'
 import { EditorContext } from '@leanprover/infoview'
 import { Range, TextDocumentEdit } from 'vscode-languageserver-protocol'
@@ -61,25 +61,25 @@ export default function(props: React.PropsWithChildren<MakeEditLinkProps>) {
 
 /-- React component that displays a button and current count. -/
 @[widget_module]
-def counterWidget : Component CounterWidgetProps where
-  javascript := include_str ".." / "widget" / "widget.ts"
+def counterWidget : Component GraphWidgetProps where
+  javascript := include_str ".." / "widget" / "widget_graph.ts"
 
 /-- Tactic to create and display the counter widget. -/
-syntax (name := makeCounterTac) "make_counter" : tactic
+syntax (name := testWidgetTac) "test_widget" : tactic
 
 -- Not in this version of Lean; copied from newer version
 def lspRangeOfStx? (text : FileMap) (stx : Syntax) (canonicalOnly := false) : Option Lsp.Range :=
   text.utf8RangeToLspRange <$> stx.getRange? canonicalOnly
 
-@[tactic makeCounterTac] def makeCounter : Tactic
-  | `(tactic| make_counter%$stx) => do
+@[tactic testWidgetTac] def testWidget : Tactic
+  | `(tactic| test_widget%$stx) => do
     let fm ← (do getFileMap)
     let some replaceRange := (lspRangeOfStx? fm stx false) | return
-    let props : CounterWidgetProps := { count := 1, replaceRange := replaceRange }
+    let props : GraphWidgetProps := { count := 1, replaceRange := replaceRange }
     Widget.savePanelWidgetInfo counterWidget.javascriptHash (rpcEncode props) stx
   | _ => throwUnsupportedSyntax
 
 /-- Example usage -/
 example : True := by
-  make_counter
+  test_widget
   trivial
