@@ -46,7 +46,7 @@ function toGraph6(nodes, edges) {
   const bits = [];
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const key = `${i}-${j}`;
+      const key = sortedKey(nodes[i].id, nodes[j].id);
       const edge = edges.get(key);
       bits.push(edge && edge.color === "red" ? 1 : 0);
     }
@@ -65,6 +65,41 @@ function sortedKey(aId, bId) {
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
+function drawArrowhead(ctx, fromX, fromY, toX, toY, nodeRadius) {
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  const tipX = toX - nodeRadius * Math.cos(angle);
+  const tipY = toY - nodeRadius * Math.sin(angle);
+  const headLen = 14;
+  const headAngle = Math.PI / 7;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - headLen * Math.cos(angle - headAngle), tipY - headLen * Math.sin(angle - headAngle));
+  ctx.lineTo(tipX - headLen * Math.cos(angle + headAngle), tipY - headLen * Math.sin(angle + headAngle));
+  ctx.closePath();
+  ctx.fill();
+}
+function cloneEdges(edges) {
+  const m = new Map();
+  edges.forEach((val, key) => m.set(key, { ...val }));
+  return m;
+}
+function snapshotState(nodes, edges) {
+  return {
+    nodes: nodes.map((n) => ({ ...n })),
+    edges: cloneEdges(edges)
+  };
+}
+
+var btnStyle = {
+  border: "1px solid rgba(255, 255, 255, 0.15)",
+  background: "rgba(255, 255, 255, 0.08)",
+  color: "inherit",
+  padding: "6px 10px",
+  borderRadius: "6px",
+  cursor: "pointer",
+  fontSize: "12px"
+};
+
 function widget_graph_default(props) {
   const rs = React.useContext(RpcContext);
   const ec = React.useContext(EditorContext);
@@ -76,11 +111,45 @@ function widget_graph_default(props) {
   const [status, setStatus] = React.useState("Ready");
   const [range, _] = React.useState(props.replaceRange);
   const [graphMode, setGraphMode] = React.useState("simple");
+  const [directed, setDirected] = React.useState(false);
+  const [weighted, setWeighted] = React.useState(false);
+  const [nextWeight, setNextWeight] = React.useState(1);
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [draggingNodeId, setDraggingNodeId] = React.useState(null);
   const [dragOffset, setDragOffset] = React.useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
+
+  // Undo history (Issue #4)
+  const historyRef = React.useRef([]);
+  const pushHistory = () => {
+    historyRef.current.push(snapshotState(nodes, edges));
+    if (historyRef.current.length > 100) historyRef.current.shift();
+  };
+  const undo = () => {
+    if (historyRef.current.length === 0) {
+      setStatus("Nothing to undo");
+      return;
+    }
+    const prev = historyRef.current.pop();
+    setNodes(prev.nodes);
+    setEdges(prev.edges);
+    setSelectedNodeId(null);
+    setStatus("Undone");
+  };
+
+  // Ctrl+Z handler
+  React.useEffect(() => {
+    const handler = (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === "z") {
+        ev.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  });
+
   const graph6String = React.useMemo(() => toGraph6(nodes, edges), [nodes, edges]);
   const edgeCount = React.useMemo(() => {
     let count = 0;
@@ -97,7 +166,8 @@ function widget_graph_default(props) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.lineWidth = 2;
-    edges.forEach(({ color }, key) => {
+    edges.forEach((edgeData, key) => {
+      const { color } = edgeData;
       if (graphMode === "simple" && color !== "red") return;
       const [a, b] = key.split("-").map(Number);
       const na = nodes.find((n) => n.id === a);
@@ -105,9 +175,39 @@ function widget_graph_default(props) {
       if (!na || !nb) return;
       ctx.strokeStyle = color === "blue" ? "rgba(96, 165, 250, 0.85)" : "rgba(248, 113, 113, 0.9)";
       ctx.beginPath();
-      ctx.moveTo(na.x, na.y);
-      ctx.lineTo(nb.x, nb.y);
+      // For directed edges, determine source/target
+      let fromNode = na;
+      let toNode = nb;
+      if (directed && edgeData.from !== undefined) {
+        fromNode = nodes.find((n) => n.id === edgeData.from) || na;
+        toNode = nodes.find((n) => n.id === edgeData.to) || nb;
+      }
+      ctx.moveTo(fromNode.x, fromNode.y);
+      ctx.lineTo(toNode.x, toNode.y);
       ctx.stroke();
+      // Draw arrowhead for directed edges
+      if (directed && color === "red") {
+        ctx.fillStyle = ctx.strokeStyle;
+        drawArrowhead(ctx, fromNode.x, fromNode.y, toNode.x, toNode.y, 16);
+      }
+      // Draw weight label for weighted edges
+      if (weighted && edgeData.weight !== undefined && color === "red") {
+        const mx = (fromNode.x + toNode.x) / 2;
+        const my = (fromNode.y + toNode.y) / 2;
+        ctx.fillStyle = "#fef9c3";
+        ctx.font = "bold 12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        // Background pill for readability
+        const label = String(edgeData.weight);
+        const tw = ctx.measureText(label).width + 8;
+        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+        ctx.beginPath();
+        ctx.arc(mx, my, Math.max(tw / 2, 10), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#fef9c3";
+        ctx.fillText(label, mx, my);
+      }
     });
     nodes.forEach((node, index) => {
       const radius = 16;
@@ -136,7 +236,7 @@ function widget_graph_default(props) {
       ctx.fillText(index.toString(), node.x, node.y);
     });
     ctx.restore();
-  }, [nodes, edges, selectedNodeId, graphMode]);
+  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted]);
   React.useEffect(() => {
     draw();
   }, [draw]);
@@ -149,6 +249,7 @@ function widget_graph_default(props) {
     });
   };
   const addNode = (x, y) => {
+    pushHistory();
     const nextId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 0;
     const newNode = { id: nextId, x, y };
     setNodes((prev) => [...prev, newNode]);
@@ -166,24 +267,32 @@ function widget_graph_default(props) {
   };
   const toggleEdge = (aId, bId) => {
     if (aId === bId) return;
+    pushHistory();
     const key = sortedKey(aId, bId);
     setEdges((prev) => {
       const newEdges = new Map(prev);
       const existing = newEdges.get(key);
       if (graphMode === "colored") {
         if (!existing || existing.color === "blue") {
-          newEdges.set(key, { color: "red" });
-          setStatus(`Edge ${key} set to red (connected)`);
+          const edgeData = { color: "red" };
+          if (directed) { edgeData.from = aId; edgeData.to = bId; }
+          if (weighted) { edgeData.weight = existing && existing.weight ? existing.weight : nextWeight; }
+          newEdges.set(key, edgeData);
+          setStatus(`Edge ${key} set to red`);
         } else {
-          newEdges.set(key, { color: "blue" });
-          setStatus(`Edge ${key} set to blue (disconnected)`);
+          const edgeData = { color: "blue" };
+          newEdges.set(key, edgeData);
+          setStatus(`Edge ${key} set to blue`);
         }
       } else {
         if (existing && existing.color === "red") {
           newEdges.delete(key);
           setStatus(`Edge ${key} removed`);
         } else {
-          newEdges.set(key, { color: "red" });
+          const edgeData = { color: "red" };
+          if (directed) { edgeData.from = aId; edgeData.to = bId; }
+          if (weighted) { edgeData.weight = nextWeight; }
+          newEdges.set(key, edgeData);
           setStatus(`Edge ${key} added`);
         }
       }
@@ -191,6 +300,7 @@ function widget_graph_default(props) {
     });
   };
   const deleteNode = (nodeId) => {
+    pushHistory();
     setNodes((prev) => prev.filter((n) => n.id !== nodeId));
     setEdges((prev) => {
       const newEdges = new Map(prev);
@@ -281,6 +391,7 @@ function widget_graph_default(props) {
   const applyCircleLayout = () => {
     const n = nodes.length;
     if (n === 0) return;
+    pushHistory();
     const radius = Math.min(canvasSize.width, canvasSize.height) / 2 - 40;
     const cx = canvasSize.width / 2;
     const cy = canvasSize.height / 2;
@@ -297,6 +408,7 @@ function widget_graph_default(props) {
   const applySpringLayout = () => {
     const n = nodes.length;
     if (n === 0) return;
+    pushHistory();
     const area = canvasSize.width * canvasSize.height;
     const k = Math.sqrt(area / (n + 1e-3));
     let temperature = Math.min(canvasSize.width, canvasSize.height) / 8;
@@ -359,10 +471,40 @@ function widget_graph_default(props) {
     setStatus("Applied force-directed layout");
   };
   const clearGraph = () => {
+    pushHistory();
     setNodes([]);
     setEdges(/* @__PURE__ */ new Map());
     setSelectedNodeId(null);
     setStatus("Graph cleared");
+  };
+  // Issue #1 fix: ensureCompleteGraph / stripBlueEdges on mode switch
+  const switchGraphMode = (newMode) => {
+    pushHistory();
+    if (newMode === "colored") {
+      setEdges((prev) => {
+        const newEdges = new Map(prev);
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const key = sortedKey(nodes[i].id, nodes[j].id);
+            if (!newEdges.has(key)) {
+              newEdges.set(key, { color: "blue" });
+            }
+          }
+        }
+        return newEdges;
+      });
+      setStatus("Bi-colored mode: complete graph; toggle red/blue");
+    } else {
+      setEdges((prev) => {
+        const newEdges = new Map();
+        prev.forEach((val, key) => {
+          if (val.color === "red") newEdges.set(key, val);
+        });
+        return newEdges;
+      });
+      setStatus("Simple mode: add/remove edges");
+    }
+    setGraphMode(newMode);
   };
   const sendToLean = () => {
     setStatus("Sending to Lean...");
@@ -389,13 +531,21 @@ function widget_graph_default(props) {
     if (nodes.length === 0) return "";
     const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
     const lines = [];
-    edges.forEach(({ color }, key) => {
-      if (color !== "red") return;
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
       const [a, b] = key.split("-").map(Number);
       const ia = idToIndex.get(a);
       const ib = idToIndex.get(b);
       if (ia !== void 0 && ib !== void 0) {
-        lines.push(`${ia} ${ib}`);
+        if (directed && edgeData.from !== undefined) {
+          const ifrom = idToIndex.get(edgeData.from);
+          const ito = idToIndex.get(edgeData.to);
+          const w = weighted && edgeData.weight !== undefined ? ` ${edgeData.weight}` : "";
+          lines.push(`${ifrom} ${ito}${w}`);
+        } else {
+          const w = weighted && edgeData.weight !== undefined ? ` ${edgeData.weight}` : "";
+          lines.push(`${ia} ${ib}${w}`);
+        }
       }
     });
     return lines.join("\n");
@@ -403,15 +553,23 @@ function widget_graph_default(props) {
   const exportAdjMatrix = () => {
     const n = nodes.length;
     const idToIndex = new Map(nodes.map((n2, i) => [n2.id, i]));
+    const useWeights = weighted;
     const matrix = Array.from({ length: n }, () => Array(n).fill(0));
-    edges.forEach(({ color }, key) => {
-      if (color !== "red") return;
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
       const [a, b] = key.split("-").map(Number);
       const i = idToIndex.get(a);
       const j = idToIndex.get(b);
       if (i !== void 0 && j !== void 0) {
-        matrix[i][j] = 1;
-        matrix[j][i] = 1;
+        const val = useWeights && edgeData.weight !== undefined ? edgeData.weight : 1;
+        if (directed && edgeData.from !== undefined) {
+          const fi = idToIndex.get(edgeData.from);
+          const ti = idToIndex.get(edgeData.to);
+          if (fi !== void 0 && ti !== void 0) matrix[fi][ti] = val;
+        } else {
+          matrix[i][j] = val;
+          matrix[j][i] = val;
+        }
       }
     });
     return matrix.map((row) => row.join(" ")).join("\n");
@@ -447,15 +605,7 @@ function widget_graph_default(props) {
         } }, `Edges: ${edgeCount}`),
         e("button", {
           onClick: () => setSelectedNodeId(null),
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "6px 10px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Clear selection"),
         e("button", {
           onClick: clearGraph,
@@ -469,9 +619,14 @@ function widget_graph_default(props) {
             fontSize: "12px"
           }
         }, "Clear graph"),
+        // Undo button (Issue #4)
+        e("button", {
+          onClick: undo,
+          style: btnStyle
+        }, "Undo (Ctrl+Z)"),
         e("select", {
           value: graphMode,
-          onChange: (ev) => setGraphMode(ev.target.value),
+          onChange: (ev) => switchGraphMode(ev.target.value),
           style: {
             border: "1px solid rgba(255, 255, 255, 0.15)",
             background: "rgba(255, 255, 255, 0.08)",
@@ -485,29 +640,48 @@ function widget_graph_default(props) {
           e("option", { value: "simple" }, "Simple graph"),
           e("option", { value: "colored" }, "Bi-colored graph")
         ]),
+        // Directed toggle (Issue #3)
+        e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" } }, [
+          e("input", {
+            type: "checkbox",
+            checked: directed,
+            onChange: (ev) => setDirected(ev.target.checked)
+          }),
+          "Directed"
+        ]),
+        // Weighted toggle (Issue #3)
+        e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" } }, [
+          e("input", {
+            type: "checkbox",
+            checked: weighted,
+            onChange: (ev) => setWeighted(ev.target.checked)
+          }),
+          "Weighted"
+        ]),
+        weighted ? e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" } }, [
+          "W:",
+          e("input", {
+            type: "number",
+            value: nextWeight,
+            onChange: (ev) => setNextWeight(Number(ev.target.value) || 1),
+            style: {
+              width: "50px",
+              border: "1px solid rgba(255, 255, 255, 0.15)",
+              background: "rgba(255, 255, 255, 0.08)",
+              color: "inherit",
+              padding: "4px 6px",
+              borderRadius: "4px",
+              fontSize: "12px"
+            }
+          })
+        ]) : null,
         e("button", {
           onClick: applyCircleLayout,
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "6px 10px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Circle layout"),
         e("button", {
           onClick: applySpringLayout,
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "6px 10px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Spring layout")
       ])
     ]),
@@ -537,7 +711,7 @@ function widget_graph_default(props) {
         fontSize: "11px",
         color: "#cbd5e1",
         marginBottom: "8px"
-      } }, "Click empty space to add a node. Click two nodes to toggle edge. Drag to reposition. Right-click to delete."),
+      } }, "Click empty space to add a node. Click two nodes to toggle edge. Drag to reposition. Right-click to delete. Ctrl+Z to undo."),
       e("div", { style: { display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" } }, [
         e("button", {
           onClick: sendToLean,
@@ -557,45 +731,21 @@ function widget_graph_default(props) {
             navigator.clipboard.writeText(graph6String);
             setStatus("Copied graph6 to clipboard");
           },
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "8px 12px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Copy graph6"),
         e("button", {
           onClick: () => {
             navigator.clipboard.writeText(exportEdgeList());
             setStatus("Copied edge list to clipboard");
           },
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "8px 12px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Copy edges"),
         e("button", {
           onClick: () => {
             navigator.clipboard.writeText(exportAdjMatrix());
             setStatus("Copied adjacency matrix to clipboard");
           },
-          style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "8px 12px",
-            borderRadius: "6px",
-            cursor: "pointer",
-            fontSize: "12px"
-          }
+          style: btnStyle
         }, "Copy matrix")
       ]),
       e("div", { style: {

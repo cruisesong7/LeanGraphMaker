@@ -84,6 +84,13 @@
       font-size: 12px;
       border: 1px solid rgba(255, 255, 255, 0.15);
     }
+    label.toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
     #canvas {
       flex: 1;
       background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 60%),
@@ -128,12 +135,13 @@
 </head>
 <body>
   <header>
-    <h1>Graph Drawer — simple undirected graphs (graph6 / edge list / adjacency)</h1>
+    <h1>Graph Drawer — undirected / directed / weighted graphs</h1>
     <div class="controls">
       <span class="badge" id="nodeCount">Nodes: 0</span>
       <span class="badge" id="edgeCount">Edges: 0</span>
       <button id="clearSelection">Clear selection</button>
       <button id="clearGraph" class="danger">Clear graph</button>
+      <button id="undoBtn">Undo (Ctrl+Z)</button>
       <button id="exportG6" class="primary">Export graph6</button>
       <button id="exportEdges">Export edge list</button>
       <button id="exportAdj">Export adjacency matrix</button>
@@ -142,6 +150,8 @@
         <option value="simple">Simple graph</option>
         <option value="colored">Bi-colored graph</option>
       </select>
+      <label class="toggle"><input type="checkbox" id="directedToggle"> Directed</label>
+      <label class="toggle"><input type="checkbox" id="weightedToggle"> Weighted</label>
       <select id="layoutMode" aria-label="Graph layout mode">
         <option value="manual">Manual layout</option>
         <option value="circle">Circle layout</option>
@@ -156,9 +166,10 @@
   <div class="bottom-panel">
     <div class="flex-between">
       <div class="hint">
-        Click empty space to add a node. Click two nodes in a row to toggle an undirected edge.
-        Drag a node to reposition. Right-click a node to delete it. In bi-colored mode, the
-        graph is complete: clicking two nodes toggles red ↔ blue (exports include red edges only).
+        Click empty space to add a node. Click two nodes in a row to toggle an edge.
+        Drag a node to reposition. Right-click a node to delete it. Ctrl+Z to undo.
+        In bi-colored mode the graph is complete: clicking two nodes toggles red &harr; blue.
+        Enable Directed for arrows. Enable Weighted to assign edge weights.
       </div>
       <span class="badge" id="status">Ready</span>
     </div>
@@ -175,9 +186,12 @@
     const graphModeEl = document.getElementById("graphMode");
     const layoutModeEl = document.getElementById("layoutMode");
     const applyLayoutBtn = document.getElementById("applyLayout");
+    const directedToggle = document.getElementById("directedToggle");
+    const weightedToggle = document.getElementById("weightedToggle");
+    const undoBtn = document.getElementById("undoBtn");
 
     const nodes = []; // { id, x, y }
-    const edges = new Map(); // store key -> { color: "red" | "blue" }
+    const edges = new Map(); // key -> { color: "red"|"blue", from?, to?, weight? }
 
     let selectedNodeId = null;
     let draggingNodeId = null;
@@ -185,7 +199,62 @@
     let dragStart = { x: 0, y: 0 };
     let isDragging = false;
     let nextId = 0;
-    let graphMode = "simple"; // "simple" | "colored"
+    let graphMode = "simple";
+    let isDirected = false;
+    let isWeighted = false;
+
+    // Undo history (Issue #4)
+    const history = [];
+    const MAX_HISTORY = 100;
+
+    function pushHistory() {
+      const snapshot = {
+        nodes: nodes.map(n => ({ ...n })),
+        edges: new Map(),
+        nextId: nextId,
+        selectedNodeId: selectedNodeId
+      };
+      edges.forEach((val, key) => snapshot.edges.set(key, { ...val }));
+      history.push(snapshot);
+      if (history.length > MAX_HISTORY) history.shift();
+    }
+
+    function undo() {
+      if (history.length === 0) {
+        setStatus("Nothing to undo");
+        return;
+      }
+      const prev = history.pop();
+      nodes.length = 0;
+      prev.nodes.forEach(n => nodes.push(n));
+      edges.clear();
+      prev.edges.forEach((val, key) => edges.set(key, val));
+      nextId = prev.nextId;
+      selectedNodeId = prev.selectedNodeId;
+      updateBadges();
+      draw();
+      setStatus("Undone");
+    }
+
+    // Ctrl+Z
+    window.addEventListener("keydown", e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        e.preventDefault();
+        undo();
+      }
+    });
+
+    undoBtn.addEventListener("click", undo);
+
+    directedToggle.addEventListener("change", () => {
+      isDirected = directedToggle.checked;
+      draw();
+    });
+
+    weightedToggle.addEventListener("change", () => {
+      isWeighted = weightedToggle.checked;
+      draw();
+    });
 
     function resizeCanvas() {
       canvas.width = canvas.clientWidth;
@@ -248,22 +317,68 @@
         : `Edges: ${redEdgeCount()}`;
     }
 
+    function drawArrowhead(fromX, fromY, toX, toY, nodeRadius) {
+      const angle = Math.atan2(toY - fromY, toX - fromX);
+      const tipX = toX - nodeRadius * Math.cos(angle);
+      const tipY = toY - nodeRadius * Math.sin(angle);
+      const headLen = 14;
+      const headAngle = Math.PI / 7;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - headLen * Math.cos(angle - headAngle), tipY - headLen * Math.sin(angle - headAngle));
+      ctx.lineTo(tipX - headLen * Math.cos(angle + headAngle), tipY - headLen * Math.sin(angle + headAngle));
+      ctx.closePath();
+      ctx.fill();
+    }
+
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       // draw edges
       ctx.lineWidth = 2;
-      edges.forEach(({ color }, key) => {
+      edges.forEach((edgeData, key) => {
+        const { color } = edgeData;
         if (graphMode === "simple" && color !== "red") return;
         const [a, b] = key.split("-").map(Number);
         const na = nodes.find(n => n.id === a);
         const nb = nodes.find(n => n.id === b);
         if (!na || !nb) return;
         ctx.strokeStyle = color === "blue" ? "rgba(96, 165, 250, 0.85)" : "rgba(248, 113, 113, 0.9)";
+
+        let fromNode = na;
+        let toNode = nb;
+        if (isDirected && edgeData.from !== undefined) {
+          fromNode = nodes.find(n => n.id === edgeData.from) || na;
+          toNode = nodes.find(n => n.id === edgeData.to) || nb;
+        }
+
         ctx.beginPath();
-        ctx.moveTo(na.x, na.y);
-        ctx.lineTo(nb.x, nb.y);
+        ctx.moveTo(fromNode.x, fromNode.y);
+        ctx.lineTo(toNode.x, toNode.y);
         ctx.stroke();
+
+        // Arrowhead for directed edges
+        if (isDirected && color === "red") {
+          ctx.fillStyle = ctx.strokeStyle;
+          drawArrowhead(fromNode.x, fromNode.y, toNode.x, toNode.y, 16);
+        }
+
+        // Weight label
+        if (isWeighted && edgeData.weight !== undefined && color === "red") {
+          const mx = (fromNode.x + toNode.x) / 2;
+          const my = (fromNode.y + toNode.y) / 2;
+          ctx.font = "bold 12px system-ui, sans-serif";
+          const label = String(edgeData.weight);
+          const tw = ctx.measureText(label).width + 8;
+          ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+          ctx.beginPath();
+          ctx.arc(mx, my, Math.max(tw / 2, 10), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#fef9c3";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, mx, my);
+        }
       });
 
       // draw nodes
@@ -299,10 +414,10 @@
     }
 
     function addNode(x, y) {
+      pushHistory();
       const newNode = { id: nextId++, x, y };
       nodes.push(newNode);
       if (graphMode === "colored") {
-        // new node connects to all existing nodes as blue (disconnected)
         for (let i = 0; i < nodes.length - 1; i++) {
           const key = sortedKey(nodes[i].id, newNode.id);
           edges.set(key, { color: "blue" });
@@ -324,25 +439,33 @@
 
     function toggleEdge(aId, bId) {
       if (aId === bId) return;
+      pushHistory();
       const key = sortedKey(aId, bId);
       const existing = edges.get(key);
 
       if (graphMode === "colored") {
-        // always keep the edge; toggle red/blue
         if (!existing || existing.color === "blue") {
-          edges.set(key, { color: "red" });
-          setStatus(`Edge ${key} set to red (connected)`);
+          const edgeData = { color: "red" };
+          if (isDirected) { edgeData.from = aId; edgeData.to = bId; }
+          if (isWeighted) { edgeData.weight = existing && existing.weight ? existing.weight : 1; }
+          edges.set(key, edgeData);
+          setStatus(`Edge ${key} set to red`);
         } else {
           edges.set(key, { color: "blue" });
-          setStatus(`Edge ${key} set to blue (disconnected)`);
+          setStatus(`Edge ${key} set to blue`);
         }
       } else {
-        // simple mode: add/remove red edges
         if (existing && existing.color === "red") {
           edges.delete(key);
           setStatus(`Edge ${key} removed`);
         } else {
-          edges.set(key, { color: "red" });
+          const edgeData = { color: "red" };
+          if (isDirected) { edgeData.from = aId; edgeData.to = bId; }
+          if (isWeighted) {
+            const w = prompt("Edge weight:", "1");
+            edgeData.weight = w !== null && w !== "" ? Number(w) : 1;
+          }
+          edges.set(key, edgeData);
           setStatus(`Edge ${key} added`);
         }
       }
@@ -379,7 +502,6 @@
       for (let iter = 0; iter < iterations; iter++) {
         const disp = nodes.map(() => ({ x: 0, y: 0 }));
 
-        // repulsive forces
         for (let i = 0; i < n; i++) {
           for (let j = i + 1; j < n; j++) {
             const dx = nodes[j].x - nodes[i].x;
@@ -395,7 +517,6 @@
           }
         }
 
-        // attractive forces along red edges only
         edges.forEach(({ color }, key) => {
           if (color !== "red") return;
           const [aId, bId] = key.split("-").map(Number);
@@ -417,7 +538,6 @@
           disp[j].y -= fy;
         });
 
-        // move nodes
         for (let i = 0; i < n; i++) {
           const node = nodes[i];
           const dx = disp[i].x;
@@ -434,6 +554,7 @@
     }
 
     function applyLayout(mode) {
+      pushHistory();
       switch (mode) {
         case "circle":
           applyCircleLayout();
@@ -451,10 +572,10 @@
     }
 
     function deleteNode(nodeId) {
+      pushHistory();
       const idx = nodes.findIndex(n => n.id === nodeId);
       if (idx === -1) return;
       nodes.splice(idx, 1);
-      // remove incident edges
       Array.from(edges.keys()).forEach(key => {
         const [a, b] = key.split("-").map(Number);
         if (a === nodeId || b === nodeId) edges.delete(key);
@@ -544,10 +665,20 @@
       if (nodes.length === 0) return "";
       const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
       const lines = [];
-      edges.forEach(({ color }, key) => {
-        if (color !== "red") return;
+      edges.forEach((edgeData, key) => {
+        if (edgeData.color !== "red") return;
         const [a, b] = key.split("-").map(Number);
-        lines.push(`${idToIndex.get(a)} ${idToIndex.get(b)}`);
+        if (isDirected && edgeData.from !== undefined) {
+          const ifrom = idToIndex.get(edgeData.from);
+          const ito = idToIndex.get(edgeData.to);
+          const w = isWeighted && edgeData.weight !== undefined ? ` ${edgeData.weight}` : "";
+          lines.push(`${ifrom} ${ito}${w}`);
+        } else {
+          const ia = idToIndex.get(a);
+          const ib = idToIndex.get(b);
+          const w = isWeighted && edgeData.weight !== undefined ? ` ${edgeData.weight}` : "";
+          lines.push(`${ia} ${ib}${w}`);
+        }
       });
       return lines.join("\n");
     }
@@ -556,21 +687,28 @@
       const n = nodes.length;
       const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
       const matrix = Array.from({ length: n }, () => Array(n).fill(0));
-      edges.forEach(({ color }, key) => {
-        if (color !== "red") return;
+      edges.forEach((edgeData, key) => {
+        if (edgeData.color !== "red") return;
         const [a, b] = key.split("-").map(Number);
-        const i = idToIndex.get(a);
-        const j = idToIndex.get(b);
-        if (i === undefined || j === undefined) return;
-        matrix[i][j] = 1;
-        matrix[j][i] = 1;
+        const val = isWeighted && edgeData.weight !== undefined ? edgeData.weight : 1;
+        if (isDirected && edgeData.from !== undefined) {
+          const fi = idToIndex.get(edgeData.from);
+          const ti = idToIndex.get(edgeData.to);
+          if (fi !== undefined && ti !== undefined) matrix[fi][ti] = val;
+        } else {
+          const i = idToIndex.get(a);
+          const j = idToIndex.get(b);
+          if (i !== undefined && j !== undefined) {
+            matrix[i][j] = val;
+            matrix[j][i] = val;
+          }
+        }
       });
       return matrix.map(row => row.join(" ")).join("\n");
     }
 
     function toGraph6() {
       const n = nodes.length;
-      const idToIndex = new Map(nodes.map((n, i) => [n.id, i]));
       if (n === 0) return "?";
       if (n > 62) {
         alert("graph6 export in this demo supports up to 62 vertices.");
@@ -607,6 +745,7 @@
     });
 
     document.getElementById("clearGraph").addEventListener("click", () => {
+      pushHistory();
       nodes.length = 0;
       edges.clear();
       selectedNodeId = null;
@@ -646,10 +785,11 @@
     });
 
     graphModeEl.addEventListener("change", () => {
+      pushHistory();
       const nextMode = graphModeEl.value;
       if (nextMode === "colored") {
         ensureCompleteGraph();
-        setStatus("Bi-colored mode: complete graph; click two nodes to toggle red ↔ blue");
+        setStatus("Bi-colored mode: complete graph; click two nodes to toggle red / blue");
       } else {
         stripBlueEdges();
         setStatus("Simple mode: click two nodes to add/remove edges");
@@ -668,4 +808,3 @@
   </script>
 </body>
 </html>
-
