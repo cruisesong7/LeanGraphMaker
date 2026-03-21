@@ -30,7 +30,7 @@ def graphWidget.updateGraph (props : GraphWidgetProps) : RequestM (RequestTask M
 
 @[widget_module]
 def graphWidget : Component GraphWidgetProps where
-  javascript := include_str ".." / "widget" / "widget_graph.js"
+  javascript := include_str "Widget" / "widget_graph.js"
 
 def lspRangeOfStx? (text : FileMap) (stx : Syntax) (canonicalOnly := false) : Option Lsp.Range :=
   text.utf8RangeToLspRange <$> stx.getRange? canonicalOnly
