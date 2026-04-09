@@ -16,8 +16,8 @@ function parseGraph6(g6, canvasWidth, canvasHeight) {
   }
   const edges = /* @__PURE__ */ new Map();
   let bitIndex = 0;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
+  for (let j = 1; j < n; j++) {
+    for (let i = 0; i < j; i++) {
       if (bits[bitIndex] === 1) {
         edges.set(`${i}-${j}`, { color: "red" });
       }
@@ -44,8 +44,8 @@ function toGraph6(nodes, edges) {
   if (n > 62) return "?";
   const header = String.fromCharCode(n + 63);
   const bits = [];
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
+  for (let j = 1; j < n; j++) {
+    for (let i = 0; i < j; i++) {
       const key = sortedKey(nodes[i].id, nodes[j].id);
       const edge = edges.get(key);
       bits.push(edge && edge.color === "red" ? 1 : 0);
@@ -119,6 +119,7 @@ function widget_graph_default(props) {
   const [dragOffset, setDragOffset] = React.useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
+  const dragHistorySavedRef = React.useRef(false);
 
   // Undo history (Issue #4)
   const historyRef = React.useRef([]);
@@ -331,6 +332,7 @@ function widget_graph_default(props) {
       setDragOffset({ x: node.x - x, y: node.y - y });
       setDragStart({ x, y });
       setIsDragging(false);
+      dragHistorySavedRef.current = false;
     }
   };
   const handleMouseMove = (e2) => {
@@ -343,6 +345,10 @@ function widget_graph_default(props) {
     const x = (e2.clientX - rect.left) * scaleX;
     const y = (e2.clientY - rect.top) * scaleY;
     const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
+    if (moved && !dragHistorySavedRef.current) {
+      pushHistory();
+      dragHistorySavedRef.current = true;
+    }
     if (moved) setIsDragging(true);
     if (!isDragging && !moved) return;
     setNodes((prev) => prev.map((node) => {
