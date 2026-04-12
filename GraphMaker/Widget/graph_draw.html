@@ -198,6 +198,7 @@
     let dragOffset = { x: 0, y: 0 };
     let dragStart = { x: 0, y: 0 };
     let isDragging = false;
+    let dragHistorySaved = false;
     let nextId = 0;
     let graphMode = "simple";
     let isDirected = false;
@@ -605,6 +606,7 @@
         dragStart.x = x;
         dragStart.y = y;
         isDragging = false;
+        dragHistorySaved = false;
       }
     });
 
@@ -617,6 +619,10 @@
       if (!node) return;
 
       const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
+      if (moved && !dragHistorySaved) {
+        pushHistory();
+        dragHistorySaved = true;
+      }
       if (moved) isDragging = true;
       if (!isDragging) return;
 
@@ -716,8 +722,8 @@
       }
       const header = String.fromCharCode(n + 63);
       const bits = [];
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
+      for (let j = 1; j < n; j++) {
+        for (let i = 0; i < j; i++) {
           const key = sortedKey(nodes[i].id, nodes[j].id);
           const edge = edges.get(key);
           bits.push(edge && edge.color === "red" ? 1 : 0);
