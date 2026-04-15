@@ -120,6 +120,11 @@ function widget_graph_default(props) {
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
   const dragHistorySavedRef = React.useRef(false);
+  // Issue #11: subgraph highlight mode
+  const [subgraphMode, setSubgraphMode] = React.useState(false);
+  const [selectedSubVertices, setSelectedSubVertices] = React.useState(() => new Set());
+  const [selectedSubEdges, setSelectedSubEdges] = React.useState(() => new Set());
+  const [marquee, setMarquee] = React.useState(null); // {x0,y0,x1,y1} while dragging
 
   // Undo history (Issue #4)
   const historyRef = React.useRef([]);
@@ -183,6 +188,18 @@ function widget_graph_default(props) {
         fromNode = nodes.find((n) => n.id === edgeData.from) || na;
         toNode = nodes.find((n) => n.id === edgeData.to) || nb;
       }
+      // Subgraph highlight: yellow halo under selected edges (Issue #11)
+      if (subgraphMode && selectedSubEdges.has(key)) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(253, 224, 71, 0.9)";
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(fromNode.x, fromNode.y);
+        ctx.lineTo(toNode.x, toNode.y);
+        ctx.stroke();
+        ctx.restore();
+        ctx.beginPath();
+      }
       ctx.moveTo(fromNode.x, fromNode.y);
       ctx.lineTo(toNode.x, toNode.y);
       ctx.stroke();
@@ -213,6 +230,16 @@ function widget_graph_default(props) {
     nodes.forEach((node, index) => {
       const radius = 16;
       const isSelected = node.id === selectedNodeId;
+      const isSubSelected = subgraphMode && selectedSubVertices.has(node.id);
+      if (isSubSelected) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(253, 224, 71, 0.95)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
       const gradient = ctx.createRadialGradient(
         node.x - 6,
         node.y - 6,
@@ -236,8 +263,24 @@ function widget_graph_default(props) {
       ctx.textBaseline = "middle";
       ctx.fillText(index.toString(), node.x, node.y);
     });
+    // Marquee rectangle (Issue #11)
+    if (marquee) {
+      const x = Math.min(marquee.x0, marquee.x1);
+      const y = Math.min(marquee.y0, marquee.y1);
+      const w = Math.abs(marquee.x1 - marquee.x0);
+      const h = Math.abs(marquee.y1 - marquee.y0);
+      ctx.save();
+      ctx.strokeStyle = "rgba(253, 224, 71, 0.9)";
+      ctx.fillStyle = "rgba(253, 224, 71, 0.12)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
     ctx.restore();
-  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted]);
+  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted,
+      subgraphMode, selectedSubVertices, selectedSubEdges, marquee]);
   React.useEffect(() => {
     draw();
   }, [draw]);
@@ -247,6 +290,40 @@ function widget_graph_default(props) {
       const dx = node.x - x;
       const dy = node.y - y;
       return Math.hypot(dx, dy) <= radius;
+    });
+  };
+  const findEdgeAt = (x, y) => {
+    const tol = 6;
+    let hit = null;
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [a, b] = key.split("-").map(Number);
+      const na = nodes.find((n) => n.id === a);
+      const nb = nodes.find((n) => n.id === b);
+      if (!na || !nb) return;
+      const vx = nb.x - na.x;
+      const vy = nb.y - na.y;
+      const len2 = vx * vx + vy * vy;
+      if (len2 < 1) return;
+      const t = Math.max(0, Math.min(1, ((x - na.x) * vx + (y - na.y) * vy) / len2));
+      const px = na.x + t * vx;
+      const py = na.y + t * vy;
+      if (Math.hypot(px - x, py - y) <= tol) hit = key;
+    });
+    return hit;
+  };
+  const toggleSubVertex = (id, remove) => {
+    setSelectedSubVertices((prev) => {
+      const next = new Set(prev);
+      if (remove) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSubEdge = (key, remove) => {
+    setSelectedSubEdges((prev) => {
+      const next = new Set(prev);
+      if (remove) next.delete(key); else next.add(key);
+      return next;
     });
   };
   const addNode = (x, y) => {
@@ -314,17 +391,26 @@ function widget_graph_default(props) {
     if (selectedNodeId === nodeId) setSelectedNodeId(null);
     setStatus(`Node ${nodeId} deleted`);
   };
-  const handleMouseDown = (e2) => {
+  const canvasCoords = (e2) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    return { x: (e2.clientX - rect.left) * scaleX, y: (e2.clientY - rect.top) * scaleY, canvas };
+  };
+  const handleMouseDown = (e2) => {
+    const c = canvasCoords(e2);
+    if (!c) return;
+    const { x, y } = c;
     const node = findNodeAt(x, y);
+    // Subgraph mode: empty-space drag starts a marquee
+    if (subgraphMode && e2.button !== 2 && !node) {
+      setMarquee({ x0: x, y0: y, x1: x, y1: y });
+      return;
+    }
     if (e2.button === 2) {
-      if (node) deleteNode(node.id);
+      if (node && !subgraphMode) deleteNode(node.id);
       return;
     }
     if (node) {
@@ -336,14 +422,15 @@ function widget_graph_default(props) {
     }
   };
   const handleMouseMove = (e2) => {
+    const c = canvasCoords(e2);
+    if (!c) return;
+    const { x, y, canvas } = c;
+    if (marquee) {
+      setMarquee((m) => m ? { ...m, x1: x, y1: y } : m);
+      return;
+    }
     if (draggingNodeId === null) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    if (subgraphMode) return; // don't drag-move nodes in subgraph mode
     const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
     if (moved && !dragHistorySavedRef.current) {
       pushHistory();
@@ -363,16 +450,61 @@ function widget_graph_default(props) {
     }));
   };
   const handleMouseUp = (e2) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    const c = canvasCoords(e2);
+    if (!c) return;
+    const { x, y } = c;
+    // Finalize marquee selection (Issue #11)
+    if (marquee) {
+      const xMin = Math.min(marquee.x0, marquee.x1);
+      const xMax = Math.max(marquee.x0, marquee.x1);
+      const yMin = Math.min(marquee.y0, marquee.y1);
+      const yMax = Math.max(marquee.y0, marquee.y1);
+      const inside = new Set();
+      nodes.forEach((node) => {
+        if (node.x >= xMin && node.x <= xMax && node.y >= yMin && node.y <= yMax) {
+          inside.add(node.id);
+        }
+      });
+      if (inside.size > 0 || (xMax - xMin > 3 && yMax - yMin > 3)) {
+        setSelectedSubVertices((prev) => {
+          const next = new Set(prev);
+          inside.forEach((id) => next.add(id));
+          return next;
+        });
+        // Auto-include edges where both endpoints were dragged in together
+        setSelectedSubEdges((prev) => {
+          const next = new Set(prev);
+          edges.forEach((edgeData, key) => {
+            if (edgeData.color !== "red") return;
+            const [a, b] = key.split("-").map(Number);
+            if (inside.has(a) && inside.has(b)) next.add(key);
+          });
+          return next;
+        });
+        setStatus(`Marquee selected ${inside.size} vertices`);
+      }
+      setMarquee(null);
+      setDraggingNodeId(null);
+      return;
+    }
     const node = findNodeAt(x, y);
     if (draggingNodeId !== null && isDragging) {
       setIsDragging(false);
+      setDraggingNodeId(null);
+      return;
+    }
+    // Subgraph mode click: add vertex/edge to selection (dblclick handles removal)
+    if (subgraphMode) {
+      if (node) {
+        toggleSubVertex(node.id, false);
+        setStatus(`Selected vertex ${node.id} for subgraph`);
+      } else {
+        const edgeKey = findEdgeAt(x, y);
+        if (edgeKey) {
+          toggleSubEdge(edgeKey, false);
+          setStatus(`Selected edge ${edgeKey} for subgraph`);
+        }
+      }
       setDraggingNodeId(null);
       return;
     }
@@ -390,6 +522,23 @@ function widget_graph_default(props) {
     }
     setIsDragging(false);
     setDraggingNodeId(null);
+  };
+  const handleDoubleClick = (e2) => {
+    if (!subgraphMode) return;
+    const c = canvasCoords(e2);
+    if (!c) return;
+    const { x, y } = c;
+    const node = findNodeAt(x, y);
+    if (node) {
+      toggleSubVertex(node.id, true);
+      setStatus(`Deselected vertex ${node.id}`);
+      return;
+    }
+    const edgeKey = findEdgeAt(x, y);
+    if (edgeKey) {
+      toggleSubEdge(edgeKey, true);
+      setStatus(`Deselected edge ${edgeKey}`);
+    }
   };
   const handleContextMenu = (e2) => {
     e2.preventDefault();
@@ -512,10 +661,72 @@ function widget_graph_default(props) {
     }
     setGraphMode(newMode);
   };
+  const buildAdjMatrixArray = () => {
+    const n = nodes.length;
+    const idToIndex = new Map(nodes.map((n2, i) => [n2.id, i]));
+    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [a, b] = key.split("-").map(Number);
+      const val = weighted && edgeData.weight !== undefined ? edgeData.weight : 1;
+      if (directed && edgeData.from !== undefined) {
+        const fi = idToIndex.get(edgeData.from);
+        const ti = idToIndex.get(edgeData.to);
+        if (fi !== void 0 && ti !== void 0) matrix[fi][ti] = val;
+      } else {
+        const i = idToIndex.get(a);
+        const j = idToIndex.get(b);
+        if (i !== void 0 && j !== void 0) {
+          matrix[i][j] = val;
+          matrix[j][i] = val;
+        }
+      }
+    });
+    return matrix;
+  };
+  // Issue #10/#11: send payload matches widget mode.
+  //   simple + !directed + !weighted  →  kind="g6",       send graph6 string
+  //   directed (any)                   →  kind="directed", send adjacency matrix
+  //   weighted (any, non-directed)     →  kind="weighted", send weight matrix
+  //   subgraph mode with any selection →  kind="subgraph", send matrix + selected v/e
   const sendToLean = () => {
     setStatus("Sending to Lean...");
-    rs.call("graphWidget.updateGraph", {
+    const idToIndex = new Map(nodes.map((n2, i) => [n2.id, i]));
+    const hasSelection = selectedSubVertices.size > 0 || selectedSubEdges.size > 0;
+    let kind = "g6";
+    if (subgraphMode && hasSelection) kind = "subgraph";
+    else if (directed) kind = "directed";
+    else if (weighted) kind = "weighted";
+    const matrix = kind === "g6" ? [] : buildAdjMatrixArray();
+    const selectedVertices = [];
+    const selectedEdges = [];
+    if (kind === "subgraph") {
+      selectedSubVertices.forEach((id) => {
+        const idx = idToIndex.get(id);
+        if (idx !== void 0) selectedVertices.push(idx);
+      });
+      selectedSubEdges.forEach((key) => {
+        const [a, b] = key.split("-").map(Number);
+        const ia = idToIndex.get(a);
+        const ib = idToIndex.get(b);
+        if (ia === void 0 || ib === void 0) return;
+        const edgeData = edges.get(key);
+        if (directed && edgeData && edgeData.from !== undefined) {
+          const fi = idToIndex.get(edgeData.from);
+          const ti = idToIndex.get(edgeData.to);
+          if (fi !== void 0 && ti !== void 0) selectedEdges.push([fi, ti]);
+        } else {
+          selectedEdges.push([ia, ib]);
+        }
+      });
+      selectedVertices.sort((a, b) => a - b);
+    }
+    rs.call("graphWidget.sendGraph", {
+      kind,
       graph6: graph6String,
+      matrix,
+      selectedVertices,
+      selectedEdges,
       replaceRange: range
     }).then((result) => {
       if (result.edit) {
@@ -527,7 +738,7 @@ function widget_graph_default(props) {
           range: result.newSelection
         });
       }
-      setStatus("Graph sent to Lean successfully");
+      setStatus(`Graph sent to Lean (${kind})`);
     }).catch((e2) => {
       console.error(mapRpcError(e2));
       setStatus("Error sending to Lean");
@@ -688,7 +899,34 @@ function widget_graph_default(props) {
         e("button", {
           onClick: applySpringLayout,
           style: btnStyle
-        }, "Spring layout")
+        }, "Spring layout"),
+        // Highlight subgraph toggle (Issue #11)
+        e("button", {
+          onClick: () => {
+            const next = !subgraphMode;
+            setSubgraphMode(next);
+            if (!next) {
+              setSelectedSubVertices(new Set());
+              setSelectedSubEdges(new Set());
+              setMarquee(null);
+            }
+            setStatus(next ? "Subgraph mode: drag / click to select, double-click to deselect" : "Subgraph mode off");
+          },
+          style: subgraphMode ? {
+            ...btnStyle,
+            background: "rgba(253, 224, 71, 0.18)",
+            borderColor: "rgba(253, 224, 71, 0.55)",
+            color: "#fef9c3"
+          } : btnStyle
+        }, subgraphMode ? "Exit subgraph mode" : "Highlight subgraph"),
+        subgraphMode ? e("span", { style: {
+          padding: "4px 8px",
+          background: "rgba(253, 224, 71, 0.1)",
+          borderRadius: "999px",
+          fontSize: "12px",
+          border: "1px solid rgba(253, 224, 71, 0.3)",
+          color: "#fef9c3"
+        } }, `Sub: ${selectedSubVertices.size}v / ${selectedSubEdges.size}e`) : null
       ])
     ]),
     // Canvas
@@ -699,12 +937,13 @@ function widget_graph_default(props) {
       onMouseDown: handleMouseDown,
       onMouseMove: handleMouseMove,
       onMouseUp: handleMouseUp,
+      onDoubleClick: handleDoubleClick,
       onContextMenu: handleContextMenu,
       style: {
         display: "block",
         width: "100%",
         background: "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 60%), #0b1224",
-        cursor: "crosshair"
+        cursor: subgraphMode ? "cell" : "crosshair"
       }
     }),
     // Bottom panel
@@ -732,13 +971,14 @@ function widget_graph_default(props) {
             fontSize: "13px"
           }
         }, "\u{1F4E4} Send to Lean"),
-        e("button", {
+        // Issue #10: hide Copy graph6 when directed/weighted — g6 doesn't encode those
+        (!directed && !weighted) ? e("button", {
           onClick: () => {
             navigator.clipboard.writeText(graph6String);
             setStatus("Copied graph6 to clipboard");
           },
           style: btnStyle
-        }, "Copy graph6"),
+        }, "Copy graph6") : null,
         e("button", {
           onClick: () => {
             navigator.clipboard.writeText(exportEdgeList());
@@ -754,13 +994,13 @@ function widget_graph_default(props) {
           style: btnStyle
         }, "Copy matrix")
       ]),
-      e("div", { style: {
+      (!directed && !weighted) ? e("div", { style: {
         fontSize: "11px",
         fontFamily: "monospace",
         color: "#94a3b8",
         wordBreak: "break-all",
         marginBottom: "4px"
-      } }, `graph6: ${graph6String}`),
+      } }, `graph6: ${graph6String}`) : null,
       e("div", { style: {
         fontSize: "11px",
         color: "#cbd5e1",
