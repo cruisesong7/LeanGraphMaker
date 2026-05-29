@@ -48,5 +48,5 @@ syntax (name := drawGraphTac) "draw_graph" : tactic
   | _ => throwUnsupportedSyntax
 
 example : True := by
-  --draw_graph
+  draw_graph
   trivial

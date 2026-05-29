@@ -91,13 +91,18 @@ function snapshotState(nodes, edges) {
 }
 
 var btnStyle = {
-  border: "1px solid rgba(255, 255, 255, 0.15)",
-  background: "rgba(255, 255, 255, 0.08)",
-  color: "inherit",
-  padding: "6px 10px",
-  borderRadius: "6px",
+  border: "1px solid rgba(255, 255, 255, 0.12)",
+  background: "rgba(255, 255, 255, 0.06)",
+  backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
+  color: "#e2e8f0",
+  padding: "7px 12px",
+  borderRadius: "8px",
   cursor: "pointer",
-  fontSize: "12px"
+  fontSize: "11px",
+  fontWeight: "500",
+  letterSpacing: "0.01em",
+  transition: "all 0.2s ease"
 };
 
 function widget_graph_default(props) {
@@ -162,9 +167,13 @@ function widget_graph_default(props) {
   const draw = React.useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize.width * dpr;
+    canvas.height = canvasSize.height * dpr;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
     ctx.save();
     ctx.lineWidth = 2;
     edges.forEach((edgeData, key) => {
@@ -237,7 +246,7 @@ function widget_graph_default(props) {
       ctx.fillText(index.toString(), node.x, node.y);
     });
     ctx.restore();
-  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted]);
+  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted, canvasSize]);
   React.useEffect(() => {
     draw();
   }, [draw]);
@@ -318,8 +327,8 @@ function widget_graph_default(props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const scaleX = canvasSize.width / rect.width;
+    const scaleY = canvasSize.height / rect.height;
     const x = (e2.clientX - rect.left) * scaleX;
     const y = (e2.clientY - rect.top) * scaleY;
     const node = findNodeAt(x, y);
@@ -340,8 +349,8 @@ function widget_graph_default(props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const scaleX = canvasSize.width / rect.width;
+    const scaleY = canvasSize.height / rect.height;
     const x = (e2.clientX - rect.left) * scaleX;
     const y = (e2.clientY - rect.top) * scaleY;
     const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
@@ -355,8 +364,8 @@ function widget_graph_default(props) {
       if (node.id === draggingNodeId) {
         return {
           ...node,
-          x: clamp(x + dragOffset.x, 20, canvas.width - 20),
-          y: clamp(y + dragOffset.y, 20, canvas.height - 20)
+          x: clamp(x + dragOffset.x, 20, canvasSize.width - 20),
+          y: clamp(y + dragOffset.y, 20, canvasSize.height - 20)
         };
       }
       return node;
@@ -366,8 +375,8 @@ function widget_graph_default(props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const scaleX = canvasSize.width / rect.width;
+    const scaleY = canvasSize.height / rect.height;
     const x = (e2.clientX - rect.left) * scaleX;
     const y = (e2.clientY - rect.top) * scaleY;
     const node = findNodeAt(x, y);
@@ -581,34 +590,46 @@ function widget_graph_default(props) {
     return matrix.map((row) => row.join(" ")).join("\n");
   };
   return e("div", { style: {
-    fontFamily: "system-ui, sans-serif",
-    background: "#0f172a",
+    fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+    background: "linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(10, 14, 30, 0.98))",
     color: "#e2e8f0",
-    borderRadius: "8px",
-    overflow: "hidden"
+    borderRadius: "14px",
+    overflow: "hidden",
+    border: "1px solid rgba(255, 255, 255, 0.08)",
+    boxShadow: "0 20px 60px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05) inset"
   } }, [
     // Header
     e("div", { style: {
-      padding: "12px 16px",
-      background: "rgba(15, 23, 42, 0.75)",
-      borderBottom: "1px solid rgba(255, 255, 255, 0.08)"
+      padding: "14px 20px",
+      background: "rgba(255, 255, 255, 0.03)",
+      backdropFilter: "blur(12px)",
+      WebkitBackdropFilter: "blur(12px)",
+      borderBottom: "1px solid rgba(255, 255, 255, 0.06)"
     } }, [
-      e("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Graph Widget"),
-      e("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } }, [
-        e("span", { style: {
-          padding: "4px 8px",
-          background: "rgba(255, 255, 255, 0.08)",
-          borderRadius: "999px",
-          fontSize: "12px",
-          border: "1px solid rgba(255, 255, 255, 0.15)"
-        } }, `Nodes: ${nodes.length}`),
-        e("span", { style: {
-          padding: "4px 8px",
-          background: "rgba(255, 255, 255, 0.08)",
-          borderRadius: "999px",
-          fontSize: "12px",
-          border: "1px solid rgba(255, 255, 255, 0.15)"
-        } }, `Edges: ${edgeCount}`),
+      e("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } }, [
+        e("h3", { style: { margin: 0, fontSize: "14px", fontWeight: "600", letterSpacing: "-0.01em", color: "#f1f5f9" } }, "Graph Widget"),
+        e("div", { style: { display: "flex", gap: "6px" } }, [
+          e("span", { style: {
+            padding: "3px 10px",
+            background: "rgba(99, 102, 241, 0.12)",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: "500",
+            color: "#a5b4fc",
+            border: "1px solid rgba(99, 102, 241, 0.2)"
+          } }, `${nodes.length} nodes`),
+          e("span", { style: {
+            padding: "3px 10px",
+            background: "rgba(244, 63, 94, 0.1)",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: "500",
+            color: "#fda4af",
+            border: "1px solid rgba(244, 63, 94, 0.2)"
+          } }, `${edgeCount} edges`),
+        ])
+      ]),
+      e("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" } }, [
         e("button", {
           onClick: () => setSelectedNodeId(null),
           style: btnStyle
@@ -616,13 +637,17 @@ function widget_graph_default(props) {
         e("button", {
           onClick: clearGraph,
           style: {
-            border: "1px solid rgba(239, 68, 68, 0.35)",
-            background: "rgba(239, 68, 68, 0.15)",
-            color: "#fecdd3",
-            padding: "6px 10px",
-            borderRadius: "6px",
+            border: "1px solid rgba(239, 68, 68, 0.2)",
+            background: "rgba(239, 68, 68, 0.08)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+            color: "#fca5a5",
+            padding: "7px 12px",
+            borderRadius: "8px",
             cursor: "pointer",
-            fontSize: "12px"
+            fontSize: "11px",
+            fontWeight: "500",
+            transition: "all 0.2s ease"
           }
         }, "Clear graph"),
         // Undo button (Issue #4)
@@ -634,50 +659,57 @@ function widget_graph_default(props) {
           value: graphMode,
           onChange: (ev) => switchGraphMode(ev.target.value),
           style: {
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            background: "rgba(255, 255, 255, 0.08)",
-            color: "inherit",
-            padding: "6px 10px",
-            borderRadius: "6px",
-            fontSize: "12px",
-            cursor: "pointer"
+            border: "1px solid rgba(255, 255, 255, 0.12)",
+            background: "rgba(255, 255, 255, 0.06)",
+            color: "#e2e8f0",
+            padding: "7px 12px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            fontWeight: "500",
+            cursor: "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            paddingRight: "28px",
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "right 10px center"
           }
         }, [
           e("option", { value: "simple" }, "Simple graph"),
           e("option", { value: "colored" }, "Bi-colored graph")
         ]),
-        // Directed toggle (Issue #3)
-        e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" } }, [
+        e("label", { style: { fontSize: "11px", display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", color: "#94a3b8", fontWeight: "500" } }, [
           e("input", {
             type: "checkbox",
             checked: directed,
-            onChange: (ev) => setDirected(ev.target.checked)
+            onChange: (ev) => setDirected(ev.target.checked),
+            style: { accentColor: "#6366f1" }
           }),
           "Directed"
         ]),
-        // Weighted toggle (Issue #3)
-        e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" } }, [
+        e("label", { style: { fontSize: "11px", display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", color: "#94a3b8", fontWeight: "500" } }, [
           e("input", {
             type: "checkbox",
             checked: weighted,
-            onChange: (ev) => setWeighted(ev.target.checked)
+            onChange: (ev) => setWeighted(ev.target.checked),
+            style: { accentColor: "#6366f1" }
           }),
           "Weighted"
         ]),
-        weighted ? e("label", { style: { fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" } }, [
+        weighted ? e("label", { style: { fontSize: "11px", display: "flex", alignItems: "center", gap: "5px", color: "#94a3b8" } }, [
           "W:",
           e("input", {
             type: "number",
             value: nextWeight,
             onChange: (ev) => setNextWeight(Number(ev.target.value) || 1),
             style: {
-              width: "50px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
-              background: "rgba(255, 255, 255, 0.08)",
-              color: "inherit",
-              padding: "4px 6px",
-              borderRadius: "4px",
-              fontSize: "12px"
+              width: "46px",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#e2e8f0",
+              padding: "5px 8px",
+              borderRadius: "6px",
+              fontSize: "11px"
             }
           })
         ]) : null,
@@ -694,8 +726,6 @@ function widget_graph_default(props) {
     // Canvas
     e("canvas", {
       ref: canvasRef,
-      width: canvasSize.width,
-      height: canvasSize.height,
       onMouseDown: handleMouseDown,
       onMouseMove: handleMouseMove,
       onMouseUp: handleMouseUp,
@@ -703,35 +733,44 @@ function widget_graph_default(props) {
       style: {
         display: "block",
         width: "100%",
-        background: "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 60%), #0b1224",
-        cursor: "crosshair"
+        height: canvasSize.height + "px",
+        background: "radial-gradient(ellipse at 30% 20%, rgba(99, 102, 241, 0.04), transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(244, 63, 94, 0.03), transparent 50%), #080d1a",
+        cursor: "crosshair",
+        borderTop: "1px solid rgba(255, 255, 255, 0.03)",
+        borderBottom: "1px solid rgba(255, 255, 255, 0.03)"
       }
     }),
     // Bottom panel
     e("div", { style: {
-      padding: "12px 16px",
-      background: "rgba(10, 14, 26, 0.85)",
-      borderTop: "1px solid rgba(255, 255, 255, 0.08)"
+      padding: "14px 20px",
+      background: "rgba(255, 255, 255, 0.02)",
+      backdropFilter: "blur(12px)",
+      WebkitBackdropFilter: "blur(12px)",
+      borderTop: "1px solid rgba(255, 255, 255, 0.06)"
     } }, [
       e("div", { style: {
-        fontSize: "11px",
-        color: "#cbd5e1",
-        marginBottom: "8px"
-      } }, "Click empty space to add a node. Click two nodes to toggle edge. Drag to reposition. Right-click to delete. Ctrl+Z to undo."),
-      e("div", { style: { display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" } }, [
+        fontSize: "10px",
+        color: "#64748b",
+        marginBottom: "10px",
+        letterSpacing: "0.02em"
+      } }, "Click to add node · Select two nodes to toggle edge · Drag to move · Right-click to delete · Ctrl+Z undo"),
+      e("div", { style: { display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" } }, [
         e("button", {
           onClick: sendToLean,
           style: {
-            background: "linear-gradient(135deg, #22d3ee, #6366f1)",
-            color: "#0b1224",
-            border: "none",
-            padding: "8px 16px",
-            borderRadius: "6px",
+            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.9), rgba(139, 92, 246, 0.9))",
+            color: "#ffffff",
+            border: "1px solid rgba(139, 92, 246, 0.3)",
+            padding: "8px 18px",
+            borderRadius: "8px",
             cursor: "pointer",
             fontWeight: "600",
-            fontSize: "13px"
+            fontSize: "12px",
+            letterSpacing: "0.01em",
+            boxShadow: "0 4px 16px rgba(99, 102, 241, 0.25)",
+            transition: "all 0.2s ease"
           }
-        }, "\u{1F4E4} Send to Lean"),
+        }, "Send to Lean"),
         e("button", {
           onClick: () => {
             navigator.clipboard.writeText(graph6String);
@@ -755,16 +794,20 @@ function widget_graph_default(props) {
         }, "Copy matrix")
       ]),
       e("div", { style: {
-        fontSize: "11px",
-        fontFamily: "monospace",
-        color: "#94a3b8",
+        fontSize: "10px",
+        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        color: "#475569",
         wordBreak: "break-all",
-        marginBottom: "4px"
-      } }, `graph6: ${graph6String}`),
+        marginBottom: "6px",
+        padding: "6px 10px",
+        background: "rgba(0, 0, 0, 0.2)",
+        borderRadius: "6px",
+        border: "1px solid rgba(255, 255, 255, 0.04)"
+      } }, `g6: ${graph6String}`),
       e("div", { style: {
-        fontSize: "11px",
-        color: "#cbd5e1",
-        fontStyle: "italic"
+        fontSize: "10px",
+        color: "#64748b",
+        letterSpacing: "0.02em"
       } }, status)
     ])
   ]);
