@@ -105,19 +105,59 @@ var btnStyle = {
   transition: "all 0.2s ease"
 };
 
+function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected) {
+  const n = matrix.length;
+  if (n === 0) return { nodes: [], edges: new Map() };
+  const nodes = [];
+  const radius = Math.min(canvasWidth, canvasHeight) / 2 - 40;
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
+  for (let i = 0; i < n; i++) {
+    const angle = 2 * Math.PI * i / n;
+    nodes.push({ id: i, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) });
+  }
+  const edges = new Map();
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (matrix[i][j] !== 0) {
+        const key = sortedKey(i, j);
+        if (isDirected) {
+          if (!edges.has(key)) {
+            edges.set(key, { color: "red", from: i, to: j, weight: matrix[i][j] });
+          } else {
+            const existing = edges.get(key);
+            if (existing.from !== i) {
+              edges.set(key + "_rev", { color: "red", from: i, to: j, weight: matrix[i][j] });
+            }
+          }
+        } else {
+          if (!edges.has(key)) {
+            edges.set(key, { color: "red", weight: matrix[i][j] });
+          }
+        }
+      }
+    }
+  }
+  return { nodes, edges };
+}
+
 function widget_graph_default(props) {
   const rs = React.useContext(RpcContext);
   const ec = React.useContext(EditorContext);
   const canvasRef = React.useRef(null);
   const [canvasSize, setCanvasSize] = React.useState({ width: 600, height: 400 });
-  const initialGraph = parseGraph6(props.graph6 || "?", canvasSize.width, canvasSize.height);
+  const readOnly = props.readOnly || false;
+  const initMatrix = props.initialMatrix || [];
+  const initialGraph = initMatrix.length > 0
+    ? initFromMatrix(initMatrix, canvasSize.width, canvasSize.height, props.directed || false)
+    : parseGraph6(props.graph6 || "?", canvasSize.width, canvasSize.height);
   const [nodes, setNodes] = React.useState(initialGraph.nodes);
   const [edges, setEdges] = React.useState(initialGraph.edges);
-  const [status, setStatus] = React.useState("Ready");
+  const [status, setStatus] = React.useState(readOnly ? "View only" : "Ready");
   const [range, _] = React.useState(props.replaceRange);
   const [graphMode, setGraphMode] = React.useState("simple");
-  const [directed, setDirected] = React.useState(false);
-  const [weighted, setWeighted] = React.useState(false);
+  const [directed, setDirected] = React.useState(props.directed || false);
+  const [weighted, setWeighted] = React.useState(props.weighted || false);
   const [nextWeight, setNextWeight] = React.useState(1);
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [draggingNodeId, setDraggingNodeId] = React.useState(null);
@@ -324,6 +364,7 @@ function widget_graph_default(props) {
     setStatus(`Node ${nodeId} deleted`);
   };
   const handleMouseDown = (e2) => {
+    if (readOnly) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -372,6 +413,7 @@ function widget_graph_default(props) {
     }));
   };
   const handleMouseUp = (e2) => {
+    if (readOnly) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -521,10 +563,41 @@ function widget_graph_default(props) {
     }
     setGraphMode(newMode);
   };
+  const buildAdjMatrixLean = () => {
+    const n = nodes.length;
+    if (n === 0) return "!![]";
+    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
+    const useWeights = weighted;
+    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [a, b] = key.split("-").map(Number);
+      const i = idToIndex.get(a);
+      const j = idToIndex.get(b);
+      if (i !== void 0 && j !== void 0) {
+        const val = useWeights && edgeData.weight !== undefined ? edgeData.weight : 1;
+        if (directed && edgeData.from !== undefined) {
+          const fi = idToIndex.get(edgeData.from);
+          const ti = idToIndex.get(edgeData.to);
+          if (fi !== void 0 && ti !== void 0) matrix[fi][ti] = val;
+        } else {
+          matrix[i][j] = val;
+          matrix[j][i] = val;
+        }
+      }
+    });
+    const rows = matrix.map((row) => row.join(", ")).join(";\n      ");
+    return `!![
+      ${rows}]`;
+  };
   const sendToLean = () => {
     setStatus("Sending to Lean...");
     rs.call("graphWidget.updateGraph", {
-      graph6: graph6String,
+      adjMatrix: buildAdjMatrixLean(),
+      directed: directed,
+      weighted: weighted,
+      readOnly: false,
+      initialMatrix: [],
       replaceRange: range
     }).then((result) => {
       if (result.edit) {
@@ -606,8 +679,9 @@ function widget_graph_default(props) {
       WebkitBackdropFilter: "blur(12px)",
       borderBottom: "1px solid rgba(255, 255, 255, 0.06)"
     } }, [
-      e("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } }, [
-        e("h3", { style: { margin: 0, fontSize: "14px", fontWeight: "600", letterSpacing: "-0.01em", color: "#f1f5f9" } }, "Graph Widget"),
+      e("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: readOnly ? "0" : "10px" } }, [
+        e("h3", { style: { margin: 0, fontSize: "14px", fontWeight: "600", letterSpacing: "-0.01em", color: "#f1f5f9" } },
+          readOnly ? "Graph Viewer" : "Graph Widget"),
         e("div", { style: { display: "flex", gap: "6px" } }, [
           e("span", { style: {
             padding: "3px 10px",
@@ -627,13 +701,27 @@ function widget_graph_default(props) {
             color: "#fda4af",
             border: "1px solid rgba(244, 63, 94, 0.2)"
           } }, `${edgeCount} edges`),
+          directed ? e("span", { style: {
+            padding: "3px 10px",
+            background: "rgba(251, 191, 36, 0.1)",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: "500",
+            color: "#fcd34d",
+            border: "1px solid rgba(251, 191, 36, 0.2)"
+          } }, "directed") : null,
+          weighted ? e("span", { style: {
+            padding: "3px 10px",
+            background: "rgba(52, 211, 153, 0.1)",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: "500",
+            color: "#6ee7b7",
+            border: "1px solid rgba(52, 211, 153, 0.2)"
+          } }, "weighted") : null,
         ])
       ]),
-      e("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" } }, [
-        e("button", {
-          onClick: () => setSelectedNodeId(null),
-          style: btnStyle
-        }, "Clear selection"),
+      !readOnly ? e("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" } }, [
         e("button", {
           onClick: clearGraph,
           style: {
@@ -650,7 +738,6 @@ function widget_graph_default(props) {
             transition: "all 0.2s ease"
           }
         }, "Clear graph"),
-        // Undo button (Issue #4)
         e("button", {
           onClick: undo,
           style: btnStyle
@@ -721,25 +808,33 @@ function widget_graph_default(props) {
           onClick: applySpringLayout,
           style: btnStyle
         }, "Spring layout")
-      ])
+      ]) : null
     ]),
     // Canvas
-    e("canvas", {
-      ref: canvasRef,
-      onMouseDown: handleMouseDown,
-      onMouseMove: handleMouseMove,
-      onMouseUp: handleMouseUp,
-      onContextMenu: handleContextMenu,
-      style: {
-        display: "block",
-        width: "100%",
-        height: canvasSize.height + "px",
-        background: "radial-gradient(ellipse at 30% 20%, rgba(99, 102, 241, 0.04), transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(244, 63, 94, 0.03), transparent 50%), #080d1a",
-        cursor: "crosshair",
-        borderTop: "1px solid rgba(255, 255, 255, 0.03)",
-        borderBottom: "1px solid rgba(255, 255, 255, 0.03)"
-      }
-    }),
+    e("div", { style: {
+      display: "flex",
+      justifyContent: "center",
+      background: "#080d1a",
+      borderTop: "1px solid rgba(255, 255, 255, 0.03)",
+      borderBottom: "1px solid rgba(255, 255, 255, 0.03)"
+    } },
+      e("canvas", {
+        ref: canvasRef,
+        onMouseDown: handleMouseDown,
+        onMouseMove: handleMouseMove,
+        onMouseUp: handleMouseUp,
+        onContextMenu: handleContextMenu,
+        style: {
+          display: "block",
+          width: canvasSize.width + "px",
+          maxWidth: "100%",
+          height: "auto",
+          aspectRatio: canvasSize.width + " / " + canvasSize.height,
+          background: "radial-gradient(ellipse at 30% 20%, rgba(99, 102, 241, 0.04), transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(244, 63, 94, 0.03), transparent 50%), #080d1a",
+          cursor: readOnly ? "default" : "crosshair"
+        }
+      })
+    ),
     // Bottom panel
     e("div", { style: {
       padding: "14px 20px",
@@ -747,7 +842,37 @@ function widget_graph_default(props) {
       backdropFilter: "blur(12px)",
       WebkitBackdropFilter: "blur(12px)",
       borderTop: "1px solid rgba(255, 255, 255, 0.06)"
-    } }, [
+    } }, readOnly ? [
+      e("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } }, [
+        (!directed && !weighted) ? e("button", {
+          onClick: () => {
+            navigator.clipboard.writeText(graph6String);
+            setStatus("Copied graph6 to clipboard");
+          },
+          style: btnStyle
+        }, "Copy graph6") : null,
+        e("button", {
+          onClick: () => {
+            navigator.clipboard.writeText(exportAdjMatrix());
+            setStatus("Copied adjacency matrix to clipboard");
+          },
+          style: btnStyle
+        }, "Copy matrix"),
+        e("button", {
+          onClick: () => {
+            navigator.clipboard.writeText(exportEdgeList());
+            setStatus("Copied edge list to clipboard");
+          },
+          style: btnStyle
+        }, "Copy edges")
+      ]),
+      e("div", { style: {
+        fontSize: "10px",
+        color: "#64748b",
+        marginTop: "8px",
+        letterSpacing: "0.02em"
+      } }, status)
+    ] : [
       e("div", { style: {
         fontSize: "10px",
         color: "#64748b",
@@ -771,13 +896,13 @@ function widget_graph_default(props) {
             transition: "all 0.2s ease"
           }
         }, "Send to Lean"),
-        e("button", {
+        (!directed && !weighted) ? e("button", {
           onClick: () => {
             navigator.clipboard.writeText(graph6String);
             setStatus("Copied graph6 to clipboard");
           },
           style: btnStyle
-        }, "Copy graph6"),
+        }, "Copy graph6") : null,
         e("button", {
           onClick: () => {
             navigator.clipboard.writeText(exportEdgeList());
@@ -802,8 +927,9 @@ function widget_graph_default(props) {
         padding: "6px 10px",
         background: "rgba(0, 0, 0, 0.2)",
         borderRadius: "6px",
-        border: "1px solid rgba(255, 255, 255, 0.04)"
-      } }, `g6: ${graph6String}`),
+        border: "1px solid rgba(255, 255, 255, 0.04)",
+        whiteSpace: "pre-wrap"
+      } }, (!directed && !weighted) ? `g6: ${graph6String}` : `matrix:\n${exportAdjMatrix()}`),
       e("div", { style: {
         fontSize: "10px",
         color: "#64748b",
