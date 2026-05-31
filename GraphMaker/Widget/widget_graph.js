@@ -117,23 +117,22 @@ function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected) {
     nodes.push({ id: i, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) });
   }
   const edges = new Map();
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      if (matrix[i][j] !== 0) {
+  if (isDirected) {
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i === j || matrix[i][j] === 0) continue;
         const key = sortedKey(i, j);
-        if (isDirected) {
-          if (!edges.has(key)) {
-            edges.set(key, { color: "red", from: i, to: j, weight: matrix[i][j] });
-          } else {
-            const existing = edges.get(key);
-            if (existing.from !== i) {
-              edges.set(key + "_rev", { color: "red", from: i, to: j, weight: matrix[i][j] });
-            }
-          }
-        } else {
-          if (!edges.has(key)) {
-            edges.set(key, { color: "red", weight: matrix[i][j] });
-          }
+        if (!edges.has(key)) {
+          edges.set(key, { color: "red", from: i, to: j, weight: matrix[i][j] });
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (matrix[i][j] !== 0) {
+          const key = sortedKey(i, j);
+          edges.set(key, { color: "red", weight: matrix[i][j] });
         }
       }
     }

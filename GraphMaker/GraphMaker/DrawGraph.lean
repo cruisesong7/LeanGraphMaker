@@ -52,28 +52,14 @@ def graphWidget : Component GraphWidgetProps where
 def lspRangeOfStx? (text : FileMap) (stx : Syntax) (canonicalOnly := false) : Option Lsp.Range :=
   text.utf8RangeToLspRange <$> stx.getRange? canonicalOnly
 
-/-! ## draw_graph: interactive graph construction widget -/
-
-syntax (name := drawGraphTac) "draw_graph" : tactic
-
-@[tactic drawGraphTac] def drawGraph : Tactic
-  | `(tactic| draw_graph%$stx) => do
-    let fm ← getFileMap
-    let some replaceRange := (lspRangeOfStx? fm stx false) | return
-
-    let props : GraphWidgetProps := { replaceRange := replaceRange }
-
-    Widget.savePanelWidgetInfo graphWidget.javascriptHash (rpcEncode props) stx
-  | _ => throwUnsupportedSyntax
-
-/-! ## Graph expression presenter (shift-click to visualize) -/
+/-! ## Helper functions for matrix extraction -/
 
 /-- Infer directed/weighted flags from the type of a graph expression. -/
 private def classifyGraphType (e : Expr) : MetaM (Bool × Bool) := do
   let t ← inferType e
   let name := t.getAppFn.constName?.getD .anonymous
-  let isDirected := name == ``Digraph || name == ``Digraph.WeightedDigraph
-  let isWeighted := name == ``WeightedSimpleGraph || name == ``Digraph.WeightedDigraph
+  let isDirected := name == ``Digraph || name == ``WeightedDigraph
+  let isWeighted := name == ``WeightedSimpleGraph || name == ``WeightedDigraph
   return (isDirected, isWeighted)
 
 /-- Check if an expression head is `Matrix.vecCons` or `Fin.cons`. -/
@@ -173,12 +159,45 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
         | none => pure ()
     return #[]
 
+/-! ## draw_graph: interactive graph construction widget -/
+
+syntax (name := drawGraphTac) "draw_graph" (ppSpace ident)? : tactic
+
+@[tactic drawGraphTac] def drawGraph : Tactic := fun stx => do
+  let fm ← getFileMap
+  let some replaceRange := (lspRangeOfStx? fm stx false) | return
+
+  let mut props : GraphWidgetProps := { replaceRange := replaceRange }
+
+  -- If an ident is given, pre-populate the widget with that graph (use last match for shadowing)
+  if !stx[1].isNone then
+    let name := stx[1][0].getId
+    let goal ← getMainGoal
+    let lctx ← goal.getDecl >>= fun md => pure md.lctx
+    let mut lastVal : Option Expr := none
+    for decl in lctx do
+      let some val := decl.value? | continue
+      if decl.userName != name then continue
+      lastVal := some val
+    if let some val := lastVal then
+      let (isDirected, isWeighted) ← goal.withContext do classifyGraphType val
+      let rows ← goal.withContext do extractMatrixFromExpr val
+      if rows.size > 0 then
+        props := { props with
+          «directed» := isDirected
+          «weighted» := isWeighted
+          initialMatrix := rows }
+
+  Widget.savePanelWidgetInfo graphWidget.javascriptHash (rpcEncode props) stx
+
+/-! ## Graph expression presenter (shift-click to visualize) -/
+
 /-- Check if an expression has a recognized graph type. -/
 private def isGraphExpr (e : Expr) : MetaM Bool := do
   let t ← inferType e
   let name := t.getAppFn.constName?.getD .anonymous
   return name == ``SimpleGraph || name == ``Digraph || name == ``WeightedSimpleGraph
-    || name == ``Digraph.WeightedDigraph
+    || name == ``WeightedDigraph
 
 open scoped Jsx in
 /-- Presenter that renders a graph expression as an interactive visualization. -/
@@ -212,5 +231,10 @@ example : True := by
       1, 0, 1;
       1, 1, 0]
   let G := readG6 "Dhc"
+  let G := readWeightedAdj !![
+    0, 5, 8;
+    5, 0, 3;
+    8, 3, 0]
+  draw_graph G
   with_panel_widgets [ProofWidgets.SelectionPanel]
   trivial
