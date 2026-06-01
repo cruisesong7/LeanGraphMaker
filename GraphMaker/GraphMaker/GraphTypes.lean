@@ -17,13 +17,21 @@ structure WeightedSimpleGraph (V : Type u) (W : Type v) extends SimpleGraph V wh
 structure WeightedDigraph (V : Type u) (W : Type v) extends Digraph V where
   weight : V → V → W
 
-/-! ## Constructors from matrices -/
+/-! ## Constructors: matrix → graph (following mathlib's `.toGraph` convention) -/
 
-namespace WeightedSimpleGraph
+/-- Construct a `SimpleGraph V` from a 0/1 adjacency matrix. -/
+def Matrix.toSimpleGraph {V : Type u} {α : Type*} [MulZeroOneClass α] [Nontrivial α]
+    (M : Matrix V V α) (h : M.IsAdjMatrix := by decide) : SimpleGraph V :=
+  h.toGraph
 
-/-- Construct a `WeightedSimpleGraph` from a symmetric zero-diagonal matrix. -/
-def ofMatrix {V : Type u} {W : Type v} [Zero W] [LinearOrder W]
-    (M : Matrix V V W) (hsymm : M.IsSymm) (hdiag : ∀ x, M x x = 0) :
+/-- Construct a `Digraph V` from an adjacency matrix (nonzero = edge). -/
+def Matrix.toDigraph {V : Type u} {W : Type v} [Zero W]
+    (M : Matrix V V W) : Digraph V where
+  Adj u v := M u v ≠ 0
+
+/-- Construct a `WeightedSimpleGraph V W` from a symmetric zero-diagonal matrix. -/
+def Matrix.toWeightedSimpleGraph {V : Type u} {W : Type v} [Zero W] [LinearOrder W]
+    (M : Matrix V V W) (hsymm : M.IsSymm := by decide) (hdiag : ∀ x, M x x = 0 := by decide) :
     WeightedSimpleGraph V W where
   Adj u v := M u v ≠ 0
   symm u v h := by
@@ -32,36 +40,53 @@ def ofMatrix {V : Type u} {W : Type v} [Zero W] [LinearOrder W]
   loopless := ⟨fun v => by simp [hdiag v]⟩
   weight := Sym2.lift ⟨fun u v => M u v, fun a b => by simp [hsymm.apply b a]⟩
 
-end WeightedSimpleGraph
-
-namespace WeightedDigraph
-
-/-- Construct a `WeightedDigraph` from any matrix (zero entries mean no edge). -/
-def ofMatrix {V : Type u} {W : Type v} [Zero W]
+/-- Construct a `WeightedDigraph V W` from a matrix (nonzero = edge). -/
+def Matrix.toWeightedDigraph {V : Type u} {W : Type v} [Zero W]
     (M : Matrix V V W) : WeightedDigraph V W where
   Adj u v := M u v ≠ 0
   weight u v := M u v
 
-end WeightedDigraph
+/-! ## Export functions: graph → matrix -/
 
-/-! ## Convenience constructors for `Fin n` over `ℕ` (used by the widget) -/
+/-- The 0/1 adjacency matrix of a `Digraph (Fin n)`. -/
+def Digraph.adjMatrix {n : ℕ} (G : Digraph (Fin n)) [DecidableRel G.Adj] :
+    Matrix (Fin n) (Fin n) ℕ :=
+  fun i j => if G.Adj i j then 1 else 0
 
-/-- Construct a `SimpleGraph (Fin n)` from a 0/1 adjacency matrix. -/
-def readAdjMatrix {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ)
-    (h : M.IsAdjMatrix := by decide) : SimpleGraph (Fin n) :=
-  h.toGraph
+/-- The weight matrix of a `WeightedDigraph (Fin n) ℕ`. -/
+def WeightedDigraph.adjMatrix {n : ℕ} (G : WeightedDigraph (Fin n) ℕ) :
+    Matrix (Fin n) (Fin n) ℕ :=
+  fun i j => G.weight i j
 
-/-- Construct a `Digraph (Fin n)` from an adjacency matrix. -/
-def readDigraph {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ) : Digraph (Fin n) where
-  Adj u v := M u v ≠ 0
+/-- The weight matrix of a `WeightedSimpleGraph (Fin n) ℕ`. -/
+def WeightedSimpleGraph.adjMatrix {n : ℕ} (G : WeightedSimpleGraph (Fin n) ℕ) :
+    Matrix (Fin n) (Fin n) ℕ :=
+  fun i j => G.weight s(i, j)
 
-/-- Construct a `WeightedSimpleGraph (Fin n) ℕ` from a symmetric weighted adjacency matrix. -/
-def readWeightedAdj {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ)
-    (hsymm : M.IsSymm := by decide) (hdiag : ∀ x, M x x = 0 := by decide) :
-    WeightedSimpleGraph (Fin n) ℕ :=
-  WeightedSimpleGraph.ofMatrix M hsymm hdiag
+/-! ## Roundtrip theorems: matrix → graph → matrix = id -/
 
-/-- Construct a `WeightedDigraph (Fin n) ℕ` from a weighted adjacency matrix. -/
-def readWeightedDigraph {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ) :
-    WeightedDigraph (Fin n) ℕ :=
-  WeightedDigraph.ofMatrix M
+instance {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ) : DecidableRel (M.toDigraph).Adj := by
+  unfold Matrix.toDigraph; infer_instance
+
+/-- Roundtrip: `toDigraph` then `adjMatrix` recovers the original 0/1 matrix. -/
+theorem Matrix.adjMatrix_toDigraph_eq {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ)
+    (h01 : ∀ i j, M i j = 0 ∨ M i j = 1) :
+    M.toDigraph.adjMatrix = M := by
+  ext i j
+  simp only [Digraph.adjMatrix, Matrix.toDigraph]
+  rcases h01 i j with h0 | h1
+  · simp [h0]
+  · simp [h1]
+
+/-- Roundtrip: `toWeightedDigraph` then `adjMatrix` recovers the original matrix. -/
+theorem Matrix.adjMatrix_toWeightedDigraph_eq {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ) :
+    M.toWeightedDigraph.adjMatrix = M := by
+  ext i j
+  simp [WeightedDigraph.adjMatrix, Matrix.toWeightedDigraph]
+
+/-- Roundtrip: `toWeightedSimpleGraph` then `adjMatrix` recovers the original matrix. -/
+theorem Matrix.adjMatrix_toWeightedSimpleGraph_eq {n : ℕ} (M : Matrix (Fin n) (Fin n) ℕ)
+    (hsymm : M.IsSymm) (hdiag : ∀ x, M x x = 0) :
+    (M.toWeightedSimpleGraph hsymm hdiag).adjMatrix = M := by
+  ext i j
+  simp [WeightedSimpleGraph.adjMatrix, Matrix.toWeightedSimpleGraph, Sym2.lift_mk]
