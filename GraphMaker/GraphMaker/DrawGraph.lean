@@ -35,10 +35,10 @@ def graphWidget.updateGraph (props : GraphWidgetProps) : RequestM (RequestTask M
     let doc : FileWorker.EditableDocument ← RequestM.readDoc
 
     let constructor := match props.directed, props.weighted with
-      | false, false => "readAdjMatrix"
-      | true,  false => "readDigraph"
-      | false, true  => "readWeightedAdj"
-      | true,  true  => "readWeightedDigraph"
+      | false, false => "Matrix.toSimpleGraph"
+      | true,  false => "Matrix.toDigraph"
+      | false, true  => "Matrix.toWeightedSimpleGraph"
+      | true,  true  => "Matrix.toWeightedDigraph"
 
     let newLeanText := s!"let G := {constructor} {props.adjMatrix}"
 
@@ -159,15 +159,36 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
         | none => pure ()
     return #[]
 
+/-! ## Shared widget helpers -/
+
+/-- Display the graph widget for a given matrix. Used by both `draw_graph` and `cex_graph`. -/
+def showGraphWidget (stx : Syntax) (replaceRange : Lsp.Range)
+    (rows : Array (Array Nat) := #[])
+    (directed := false) (weighted := false) (readOnly := false) : TacticM Unit := do
+  let props : GraphWidgetProps :=
+    { adjMatrix := if readOnly then
+        let rowStrs := rows.map fun row =>
+          String.intercalate ", " (row.toList.map toString)
+        "!![" ++ String.intercalate ";\n    " rowStrs.toList ++ "]"
+      else ""
+      «directed» := directed
+      «weighted» := weighted
+      «readOnly» := readOnly
+      initialMatrix := rows
+      replaceRange := replaceRange }
+  Widget.savePanelWidgetInfo graphWidget.javascriptHash (rpcEncode props) stx
+
 /-! ## draw_graph: interactive graph construction widget -/
 
-syntax (name := drawGraphTac) "draw_graph" (ppSpace ident)? : tactic
+syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
 
 @[tactic drawGraphTac] def drawGraph : Tactic := fun stx => do
   let fm ← getFileMap
   let some replaceRange := (lspRangeOfStx? fm stx false) | return
 
-  let mut props : GraphWidgetProps := { replaceRange := replaceRange }
+  let mut rows : Array (Array Nat) := #[]
+  let mut directed := false
+  let mut weighted := false
 
   -- If an ident is given, pre-populate the widget with that graph (use last match for shadowing)
   if !stx[1].isNone then
@@ -180,15 +201,12 @@ syntax (name := drawGraphTac) "draw_graph" (ppSpace ident)? : tactic
       if decl.userName != name then continue
       lastVal := some val
     if let some val := lastVal then
-      let (isDirected, isWeighted) ← goal.withContext do classifyGraphType val
-      let rows ← goal.withContext do extractMatrixFromExpr val
-      if rows.size > 0 then
-        props := { props with
-          «directed» := isDirected
-          «weighted» := isWeighted
-          initialMatrix := rows }
+      let (d, w) ← goal.withContext do classifyGraphType val
+      directed := d
+      weighted := w
+      rows ← goal.withContext do extractMatrixFromExpr val
 
-  Widget.savePanelWidgetInfo graphWidget.javascriptHash (rpcEncode props) stx
+  showGraphWidget stx replaceRange rows directed weighted
 
 /-! ## Graph expression presenter (shift-click to visualize) -/
 
@@ -208,7 +226,7 @@ def graphExprPresenter : ExprPresenter where
   present e := do
     let isGraph ← isGraphExpr e
     if !isGraph then
-      return Html.text "Select a graph expression (e.g. readAdjMatrix, readDigraph, readWeightedAdj, readWeightedDigraph, or readG6)."
+      return Html.text "Select a graph expression (e.g. Matrix.toSimpleGraph, Matrix.toDigraph, Matrix.toWeightedSimpleGraph, Matrix.toWeightedDigraph, or readG6)."
 
     let (isDirected, isWeighted) ← classifyGraphType e
     let rows ← extractMatrixFromExpr e
@@ -225,13 +243,14 @@ def graphExprPresenter : ExprPresenter where
 
     return Html.ofComponent graphWidget props #[]
 
+
 example : True := by
-  let G := readDigraph !![
+  let G := Matrix.toDigraph !![
       0, 1, 0;
       1, 0, 1;
       1, 1, 0]
   let G := readG6 "Dhc"
-  let G := readWeightedAdj !![
+  let G := Matrix.toWeightedSimpleGraph !![
     0, 5, 8;
     5, 0, 3;
     8, 3, 0]
