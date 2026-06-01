@@ -589,7 +589,61 @@ function widget_graph_default(props) {
     return `!![
       ${rows}]`;
   };
+  const verifyExport = () => {
+    const n = nodes.length;
+    if (n === 0) return true;
+    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
+    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [a, b] = key.split("-").map(Number);
+      const i = idToIndex.get(a);
+      const j = idToIndex.get(b);
+      if (i === void 0 || j === void 0) return;
+      const val = weighted && edgeData.weight !== undefined ? edgeData.weight : 1;
+      if (directed && edgeData.from !== undefined) {
+        const fi = idToIndex.get(edgeData.from);
+        const ti = idToIndex.get(edgeData.to);
+        if (fi !== void 0 && ti !== void 0) matrix[fi][ti] = val;
+      } else {
+        matrix[i][j] = val;
+        matrix[j][i] = val;
+      }
+    });
+    // Check 1: every red edge has a nonzero matrix entry
+    let ok = true;
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [a, b] = key.split("-").map(Number);
+      const i = idToIndex.get(a);
+      const j = idToIndex.get(b);
+      if (i === void 0 || j === void 0) { ok = false; return; }
+      if (directed && edgeData.from !== undefined) {
+        const fi = idToIndex.get(edgeData.from);
+        const ti = idToIndex.get(edgeData.to);
+        if (fi === void 0 || ti === void 0 || matrix[fi][ti] === 0) ok = false;
+      } else {
+        if (matrix[i][j] === 0) ok = false;
+      }
+    });
+    // Check 2: every nonzero matrix entry has a corresponding red edge
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (matrix[i][j] !== 0) {
+          const ni = nodes[i], nj = nodes[j];
+          const key = sortedKey(ni.id, nj.id);
+          const edge = edges.get(key);
+          if (!edge || edge.color !== "red") ok = false;
+        }
+      }
+    }
+    return ok;
+  };
   const sendToLean = () => {
+    if (!verifyExport()) {
+      setStatus("Export verification failed: edge data mismatch");
+      return;
+    }
     setStatus("Sending to Lean...");
     rs.call("graphWidget.updateGraph", {
       adjMatrix: buildAdjMatrixLean(),
