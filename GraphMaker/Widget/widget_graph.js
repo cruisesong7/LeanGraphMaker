@@ -165,6 +165,11 @@ function widget_graph_default(props) {
   const [isDragging, setIsDragging] = React.useState(false);
   const dragHistorySavedRef = React.useRef(false);
 
+  // Subgraph selection mode
+  const [selectMode, setSelectMode] = React.useState(false);
+  const [selectedEdges, setSelectedEdges] = React.useState(new Set());
+  const [selectedVerts, setSelectedVerts] = React.useState(new Set());
+
   // Undo history (Issue #4)
   const historyRef = React.useRef([]);
   const pushHistory = () => {
@@ -222,7 +227,10 @@ function widget_graph_default(props) {
       const na = nodes.find((n) => n.id === a);
       const nb = nodes.find((n) => n.id === b);
       if (!na || !nb) return;
-      ctx.strokeStyle = color === "blue" ? "rgba(96, 165, 250, 0.85)" : "rgba(248, 113, 113, 0.9)";
+      const isSelectedEdge = selectMode && selectedEdges.has(key);
+      ctx.strokeStyle = isSelectedEdge ? "rgba(250, 204, 21, 0.95)"
+        : color === "blue" ? "rgba(96, 165, 250, 0.85)" : "rgba(248, 113, 113, 0.9)";
+      ctx.lineWidth = isSelectedEdge ? 4 : 2;
       ctx.beginPath();
       // For directed edges, determine source/target
       let fromNode = na;
@@ -261,6 +269,7 @@ function widget_graph_default(props) {
     nodes.forEach((node, index) => {
       const radius = 16;
       const isSelected = node.id === selectedNodeId;
+      const isSubgraphVert = selectMode && selectedVerts.has(node.id);
       const gradient = ctx.createRadialGradient(
         node.x - 6,
         node.y - 6,
@@ -269,14 +278,14 @@ function widget_graph_default(props) {
         node.y,
         radius + 2
       );
-      gradient.addColorStop(0, isSelected ? "#a5b4fc" : "#34d399");
-      gradient.addColorStop(1, isSelected ? "#6366f1" : "#10b981");
+      gradient.addColorStop(0, isSubgraphVert ? "#fde047" : isSelected ? "#a5b4fc" : "#34d399");
+      gradient.addColorStop(1, isSubgraphVert ? "#ca8a04" : isSelected ? "#6366f1" : "#10b981");
       ctx.fillStyle = gradient;
       ctx.beginPath();
       ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
       ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = isSelected ? "#fef9c3" : "rgba(255,255,255,0.6)";
+      ctx.lineWidth = isSubgraphVert ? 3 : 2;
+      ctx.strokeStyle = isSubgraphVert ? "#fef9c3" : isSelected ? "#fef9c3" : "rgba(255,255,255,0.6)";
       ctx.stroke();
       ctx.fillStyle = "#0b1224";
       ctx.font = "bold 13px system-ui, sans-serif";
@@ -285,7 +294,7 @@ function widget_graph_default(props) {
       ctx.fillText(index.toString(), node.x, node.y);
     });
     ctx.restore();
-  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted, canvasSize]);
+  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted, canvasSize, selectMode, selectedEdges, selectedVerts]);
   React.useEffect(() => {
     draw();
   }, [draw]);
@@ -296,6 +305,33 @@ function widget_graph_default(props) {
       const dy = node.y - y;
       return Math.hypot(dx, dy) <= radius;
     });
+  };
+  const findEdgeAt = (x, y) => {
+    const threshold = 10;
+    let closest = null;
+    let closestDist = Infinity;
+    edges.forEach((edgeData, key) => {
+      if (edgeData.color !== "red") return;
+      const [aId, bId] = key.split("-").map(Number);
+      const na = nodes.find((n) => n.id === aId);
+      const nb = nodes.find((n) => n.id === bId);
+      if (!na || !nb) return;
+      // Point-to-segment distance
+      const dx = nb.x - na.x;
+      const dy = nb.y - na.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return;
+      let t = ((x - na.x) * dx + (y - na.y) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      const px = na.x + t * dx;
+      const py = na.y + t * dy;
+      const dist = Math.hypot(x - px, y - py);
+      if (dist < threshold && dist < closestDist) {
+        closestDist = dist;
+        closest = key;
+      }
+    });
+    return closest;
   };
   const addNode = (x, y) => {
     pushHistory();
@@ -422,6 +458,40 @@ function widget_graph_default(props) {
     const y = (e2.clientY - rect.top) * scaleY;
     const node = findNodeAt(x, y);
     if (draggingNodeId !== null && isDragging) {
+      setIsDragging(false);
+      setDraggingNodeId(null);
+      return;
+    }
+    // Subgraph selection mode: click to select/deselect edges and vertices
+    if (selectMode) {
+      if (node) {
+        setSelectedVerts((prev) => {
+          const next = new Set(prev);
+          if (next.has(node.id)) next.delete(node.id);
+          else next.add(node.id);
+          return next;
+        });
+        setStatus(selectedVerts.has(node.id) ? `Deselected vertex ${node.id}` : `Selected vertex ${node.id}`);
+      } else {
+        const edgeKey = findEdgeAt(x, y);
+        if (edgeKey) {
+          setSelectedEdges((prev) => {
+            const next = new Set(prev);
+            if (next.has(edgeKey)) next.delete(edgeKey);
+            else next.add(edgeKey);
+            return next;
+          });
+          // Auto-select both endpoints when an edge is selected
+          const [aId, bId] = edgeKey.split("-").map(Number);
+          setSelectedVerts((prev) => {
+            const next = new Set(prev);
+            next.add(aId);
+            next.add(bId);
+            return next;
+          });
+          setStatus(selectedEdges.has(edgeKey) ? `Deselected edge ${edgeKey}` : `Selected edge ${edgeKey}`);
+        }
+      }
       setIsDragging(false);
       setDraggingNodeId(null);
       return;
@@ -562,6 +632,24 @@ function widget_graph_default(props) {
     }
     setGraphMode(newMode);
   };
+  const buildSubgraphMatrixLean = () => {
+    const n = nodes.length;
+    if (n === 0 || selectedEdges.size === 0) return null;
+    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
+    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+    selectedEdges.forEach((key) => {
+      const [a, b] = key.split("-").map(Number);
+      const i = idToIndex.get(a);
+      const j = idToIndex.get(b);
+      if (i !== undefined && j !== undefined) {
+        matrix[i][j] = 1;
+        matrix[j][i] = 1;
+      }
+    });
+    const rows = matrix.map((row) => row.join(", ")).join(";\n      ");
+    return `!![
+      ${rows}]`;
+  };
   const buildAdjMatrixLean = () => {
     const n = nodes.length;
     if (n === 0) return "!![]";
@@ -639,14 +727,40 @@ function widget_graph_default(props) {
     }
     return ok;
   };
+  const hasGraphChanged = () => {
+    const init = initMatrix;
+    if (init.length === 0 && nodes.length === 0) return false;
+    if (init.length !== nodes.length) return true;
+    const n = nodes.length;
+    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const initVal = init[i] && init[i][j] ? init[i][j] : 0;
+        let curVal = 0;
+        const ni = nodes[i], nj = nodes[j];
+        if (ni && nj) {
+          const key = sortedKey(ni.id, nj.id);
+          const edge = edges.get(key);
+          if (edge && edge.color === "red") {
+            curVal = weighted && edge.weight !== undefined ? edge.weight : 1;
+          }
+        }
+        if (initVal !== curVal) return true;
+      }
+    }
+    return false;
+  };
   const sendToLean = () => {
     if (!verifyExport()) {
       setStatus("Export verification failed: edge data mismatch");
       return;
     }
+    const graphChanged = hasGraphChanged();
     setStatus("Sending to Lean...");
     rs.call("graphWidget.updateGraph", {
-      adjMatrix: buildAdjMatrixLean(),
+      adjMatrix: graphChanged ? buildAdjMatrixLean() : "",
+      subgraphMatrix: buildSubgraphMatrixLean() || "",
+      graphIdent: props.graphIdent || "",
       directed: directed,
       weighted: weighted,
       readOnly: false,
@@ -853,6 +967,25 @@ function widget_graph_default(props) {
             }
           })
         ]) : null,
+        e("button", {
+          onClick: () => {
+            setSelectMode(!selectMode);
+            if (selectMode) {
+              setStatus("Exited subgraph selection mode");
+            } else {
+              setSelectedEdges(new Set());
+              setSelectedVerts(new Set());
+              setSelectedNodeId(null);
+              setStatus("Subgraph selection mode: click edges/vertices to select");
+            }
+          },
+          style: selectMode ? {
+            ...btnStyle,
+            background: "rgba(250, 204, 21, 0.2)",
+            border: "1px solid rgba(250, 204, 21, 0.4)",
+            color: "#fde047"
+          } : btnStyle
+        }, selectMode ? "Exit Select" : "Select Subgraph"),
         e("button", {
           onClick: applyCircleLayout,
           style: btnStyle

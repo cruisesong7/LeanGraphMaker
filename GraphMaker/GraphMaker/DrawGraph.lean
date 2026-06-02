@@ -20,6 +20,8 @@ This file defines the `draw_graph` tactic for interactive graph construction and
 /-- Props for the graph widget. -/
 structure GraphWidgetProps where
   adjMatrix : String := ""
+  subgraphMatrix : String := ""
+  graphIdent : String := ""
   directed : Bool := false
   weighted : Bool := false
   readOnly : Bool := false
@@ -40,7 +42,18 @@ def graphWidget.updateGraph (props : GraphWidgetProps) : RequestM (RequestTask M
       | false, true  => "Matrix.toWeightedSimpleGraph"
       | true,  true  => "Matrix.toWeightedDigraph"
 
-    let newLeanText := s!"let G := {constructor} {props.adjMatrix}"
+    let graphName := if props.graphIdent.isEmpty then "G" else props.graphIdent
+    let subgraphExpr := s!"{graphName}.subgraphOfMatrix {props.subgraphMatrix}"
+
+    let graphChanged := !props.adjMatrix.isEmpty
+    let hasSubgraph := !props.subgraphMatrix.isEmpty
+    let indent := String.ofList (List.replicate props.replaceRange.start.character ' ')
+
+    let newLeanText := match graphChanged, hasSubgraph with
+      | false, false => ""
+      | false, true  => s!"let G' := {subgraphExpr}"
+      | true,  false => s!"let {graphName} := {constructor} {props.adjMatrix}"
+      | true,  true  => s!"let {graphName} := {constructor} {props.adjMatrix}\n{indent}let G' := {subgraphExpr}"
 
     let editLinkProps : MakeEditLinkProps := .ofReplaceRange doc.meta props.replaceRange newLeanText
     return editLinkProps
@@ -164,13 +177,15 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
 /-- Display the graph widget for a given matrix. Used by both `draw_graph` and `cex_graph`. -/
 def showGraphWidget (stx : Syntax) (replaceRange : Lsp.Range)
     (rows : Array (Array Nat) := #[])
-    (directed := false) (weighted := false) (readOnly := false) : TacticM Unit := do
+    (directed := false) (weighted := false) (readOnly := false)
+    (graphIdent : String := "") : TacticM Unit := do
   let props : GraphWidgetProps :=
     { adjMatrix := if readOnly then
         let rowStrs := rows.map fun row =>
           String.intercalate ", " (row.toList.map toString)
         "!![" ++ String.intercalate ";\n    " rowStrs.toList ++ "]"
       else ""
+      «graphIdent» := graphIdent
       «directed» := directed
       «weighted» := weighted
       «readOnly» := readOnly
@@ -210,7 +225,8 @@ syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
       weighted := w
       rows ← goal.withContext do extractMatrixFromExpr val
 
-  showGraphWidget stx replaceRange rows directed weighted
+  let identName := if !stx[1].isNone then stx[1][0].getId.toString else ""
+  showGraphWidget stx replaceRange rows directed weighted (graphIdent := identName)
 
 /-! ## Graph expression presenter (shift-click to visualize) -/
 
