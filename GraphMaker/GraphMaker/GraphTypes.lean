@@ -21,7 +21,7 @@ structure WeightedDigraph (V : Type u) (W : Type v) extends Digraph V where
 
 /-- Construct a `SimpleGraph V` from a 0/1 adjacency matrix. -/
 def Matrix.toSimpleGraph {V : Type u} {α : Type*} [MulZeroOneClass α] [Nontrivial α]
-    (M : Matrix V V α) (h : M.IsAdjMatrix := by decide) : SimpleGraph V :=
+    (M : Matrix V V α) (h : M.IsAdjMatrix := by constructor <;> decide) : SimpleGraph V :=
   h.toGraph
 
 /-- Construct a `Digraph V` from an adjacency matrix (nonzero = edge). -/

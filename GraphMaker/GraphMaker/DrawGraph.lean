@@ -201,6 +201,10 @@ syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
       if decl.userName != name then continue
       lastVal := some val
     if let some val := lastVal then
+      let val ← goal.withContext do
+        let rows ← extractMatrixFromExpr val
+        if rows.size > 0 then return val
+        whnf val
       let (d, w) ← goal.withContext do classifyGraphType val
       directed := d
       weighted := w
@@ -242,18 +246,3 @@ def graphExprPresenter : ExprPresenter where
         replaceRange := ⟨⟨0, 0⟩, ⟨0, 0⟩⟩ }
 
     return Html.ofComponent graphWidget props #[]
-
-
-example : True := by
-  let G := Matrix.toDigraph !![
-      0, 1, 0;
-      1, 0, 1;
-      1, 1, 0]
-  let G := readG6 "Dhc"
-  let G := Matrix.toWeightedSimpleGraph !![
-    0, 5, 8;
-    5, 0, 3;
-    8, 3, 0]
-  draw_graph G
-  with_panel_widgets [ProofWidgets.SelectionPanel]
-  trivial
