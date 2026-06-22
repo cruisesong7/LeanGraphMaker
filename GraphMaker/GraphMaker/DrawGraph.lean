@@ -21,6 +21,9 @@ This file defines the `draw_graph` tactic for interactive graph construction and
 structure GraphWidgetProps where
   adjMatrix : String := ""
   subgraphMatrix : String := ""
+  walkExpr : String := ""
+  walkStart : String := ""
+  walkEnd : String := ""
   graphIdent : String := ""
   directed : Bool := false
   weighted : Bool := false
@@ -47,9 +50,20 @@ def graphWidget.updateGraph (props : GraphWidgetProps) : RequestM (RequestTask M
 
     let graphChanged := !props.adjMatrix.isEmpty
     let hasSubgraph := !props.subgraphMatrix.isEmpty
+    let hasWalk := !props.walkExpr.isEmpty
     let indent := String.ofList (List.replicate props.replaceRange.start.character ' ')
+    let walkType := if props.directed then
+        s!"{graphName}.Walk {props.walkStart} {props.walkEnd}"
+      else
+        s!"{graphName}.toSimpleGraph.Walk {props.walkStart} {props.walkEnd}"
 
-    let newLeanText := match graphChanged, hasSubgraph with
+    let newLeanText :=
+      if hasWalk then
+        if graphChanged then
+          s!"let {graphName} := {constructor} {props.adjMatrix}\n{indent}let p : {walkType} := {props.walkExpr}"
+        else
+          s!"let p : {walkType} := {props.walkExpr}"
+      else match graphChanged, hasSubgraph with
       | false, false => ""
       | false, true  => s!"let G' := {subgraphExpr}"
       | true,  false => s!"let {graphName} := {constructor} {props.adjMatrix}"
@@ -230,29 +244,54 @@ syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
 
 /-! ## Graph expression presenter (shift-click to visualize) -/
 
-/-- Check if an expression has a recognized graph type. -/
-private def isGraphExpr (e : Expr) : MetaM Bool := do
+/-- Check if an expression is a matrix literal or a g6 string literal. -/
+private def isMatrixOrG6 (e : Expr) : MetaM Bool := do
   let t ← inferType e
-  let name := t.getAppFn.constName?.getD .anonymous
-  return name == ``SimpleGraph || name == ``Digraph || name == ``WeightedSimpleGraph
-    || name == ``WeightedDigraph
+  -- Check if it's a Matrix type
+  if isMatrixType t then return true
+  -- Check if it's a String (g6)
+  if t.isConstOf ``String then return true
+  return false
 
 open scoped Jsx in
-/-- Presenter that renders a graph expression as an interactive visualization. -/
+/-- Presenter that renders adjacency matrices and g6 strings as graph visualizations. -/
 @[expr_presenter]
 def graphExprPresenter : ExprPresenter where
   userName := "Graph Visualizer"
   layoutKind := .block
   present e := do
-    let isGraph ← isGraphExpr e
-    if !isGraph then
-      return Html.text "Select a graph expression (e.g. Matrix.toSimpleGraph, Matrix.toDigraph, Matrix.toWeightedSimpleGraph, Matrix.toWeightedDigraph, or readG6)."
+    let valid ← isMatrixOrG6 e
+    if !valid then
+      return Html.text "Select an adjacency matrix (!![...]) or a graph6 string."
 
-    let (isDirected, isWeighted) ← classifyGraphType e
-    let rows ← extractMatrixFromExpr e
+    let t ← inferType e
+    let mut rows : Array (Array Nat) := #[]
+    let mut isDirected := false
+    let mut isWeighted := false
+
+    if t.isConstOf ``String then
+      -- Try to extract g6 string literal
+      let e' ← whnf e
+      match e' with
+      | .lit (.strVal s) => rows := decodeG6 s
+      | _ => pure ()
+    else
+      -- Matrix expression
+      match findVecConsArg e with
+      | some vc => rows ← extractRows vc
+      | none => pure ()
 
     if rows.size == 0 then
       return Html.text "Could not extract matrix data from this expression."
+
+    -- Detect if matrix is asymmetric (directed) or has values > 1 (weighted)
+    let n := rows.size
+    for i in [:n] do
+      for j in [:n] do
+        let vij := (rows[i]!)[j]!
+        let vji := (rows[j]!)[i]!
+        if vij != vji then isDirected := true
+        if vij > 1 then isWeighted := true
 
     let props : GraphWidgetProps :=
       { readOnly := true

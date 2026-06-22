@@ -105,7 +105,7 @@ var btnStyle = {
   transition: "all 0.2s ease"
 };
 
-function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected) {
+function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected, bicolored) {
   const n = matrix.length;
   if (n === 0) return { nodes: [], edges: new Map() };
   const nodes = [];
@@ -130,9 +130,11 @@ function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected) {
   } else {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
+        const key = sortedKey(i, j);
         if (matrix[i][j] !== 0) {
-          const key = sortedKey(i, j);
           edges.set(key, { color: "red", weight: matrix[i][j] });
+        } else if (bicolored) {
+          edges.set(key, { color: "blue" });
         }
       }
     }
@@ -145,10 +147,12 @@ function widget_graph_default(props) {
   const ec = React.useContext(EditorContext);
   const canvasRef = React.useRef(null);
   const [canvasSize, setCanvasSize] = React.useState({ width: 600, height: 400 });
+  const [zoom, setZoom] = React.useState(1);
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
   const readOnly = props.readOnly || false;
   const initMatrix = props.initialMatrix || [];
   const initialGraph = initMatrix.length > 0
-    ? initFromMatrix(initMatrix, canvasSize.width, canvasSize.height, props.directed || false)
+    ? initFromMatrix(initMatrix, canvasSize.width, canvasSize.height, props.directed || false, false)
     : parseGraph6(props.graph6 || "?", canvasSize.width, canvasSize.height);
   const [nodes, setNodes] = React.useState(initialGraph.nodes);
   const [edges, setEdges] = React.useState(initialGraph.edges);
@@ -164,11 +168,33 @@ function widget_graph_default(props) {
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
   const dragHistorySavedRef = React.useRef(false);
+  const [showLabels, setShowLabels] = React.useState(false);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState(null);
+  const edgeTypingRef = React.useRef(false);
+  const prevSelectedEdgeRef = React.useRef(null);
 
-  // Subgraph selection mode
-  const [selectMode, setSelectMode] = React.useState(false);
+  // When edge is deselected, check if weight is 0 and auto-delete
+  React.useEffect(() => {
+    const prevKey = prevSelectedEdgeRef.current;
+    if (prevKey && prevKey !== selectedEdgeId) {
+      const edge = edges.get(prevKey);
+      if (edge && edge.weight === 0) {
+        setEdges((prev) => {
+          const newEdges = new Map(prev);
+          newEdges.delete(prevKey);
+          return newEdges;
+        });
+      }
+    }
+    prevSelectedEdgeRef.current = selectedEdgeId;
+  });
+
+  // Selection mode: "none", "subgraph", "walk"
+  const [selectMode, setSelectMode] = React.useState("none");
   const [selectedEdges, setSelectedEdges] = React.useState(new Set());
   const [selectedVerts, setSelectedVerts] = React.useState(new Set());
+  // Walk mode: ordered list of vertex ids forming the path
+  const [walkPath, setWalkPath] = React.useState([]);
 
   // Undo history (Issue #4)
   const historyRef = React.useRef([]);
@@ -188,12 +214,82 @@ function widget_graph_default(props) {
     setStatus("Undone");
   };
 
-  // Ctrl+Z handler
+  // Keyboard handler: Ctrl+Z undo, Delete/Backspace to delete selected node
   React.useEffect(() => {
     const handler = (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === "z") {
         ev.preventDefault();
-        undo();
+        if (selectMode === "walk" && walkPath.length > 0) {
+          setWalkPath((prev) => prev.slice(0, -1));
+          setStatus("Walk: undone last vertex");
+        } else if (selectMode === "subgraph" && (selectedEdges.size > 0 || selectedVerts.size > 0)) {
+          setSelectedEdges(new Set());
+          setSelectedVerts(new Set());
+          setStatus("Subgraph selection cleared");
+        } else {
+          undo();
+        }
+      }
+      if (ev.key === "Delete") {
+        if (selectedNodeId !== null) {
+          ev.preventDefault();
+          deleteNode(selectedNodeId);
+        } else if (selectedEdgeId !== null) {
+          ev.preventDefault();
+          pushHistory();
+          setEdges((prev) => {
+            const newEdges = new Map(prev);
+            newEdges.delete(selectedEdgeId);
+            return newEdges;
+          });
+          setStatus(`Edge ${selectedEdgeId} deleted`);
+          setSelectedEdgeId(null);
+        }
+      }
+      // Type digits to change weight of selected edge (first key replaces, then appends)
+      if (selectedEdgeId !== null && /^[0-9]$/.test(ev.key)) {
+        ev.preventDefault();
+        const newStr = edgeTypingRef.current
+          ? String((edges.get(selectedEdgeId) || {}).weight || "") + ev.key
+          : ev.key;
+        const newWeight = Number(newStr);
+        edgeTypingRef.current = true;
+        pushHistory();
+        setEdges((prev) => {
+          const newEdges = new Map(prev);
+          const e = prev.get(selectedEdgeId);
+          newEdges.set(selectedEdgeId, { ...e, weight: newWeight });
+          return newEdges;
+        });
+        if (!weighted) setWeighted(true);
+        setStatus(`Edge ${selectedEdgeId} weight: ${newWeight}`);
+      }
+      // Backspace: trim last digit of selected edge weight, or delete selected node
+      if (ev.key === "Backspace") {
+        if (selectedEdgeId !== null) {
+          ev.preventDefault();
+          const edge = edges.get(selectedEdgeId);
+          const currentStr = edge && edge.weight !== undefined ? String(edge.weight) : "";
+          const newStr = currentStr.slice(0, -1);
+          const newWeight = newStr.length > 0 ? Number(newStr) : 0;
+          pushHistory();
+          setEdges((prev) => {
+            const newEdges = new Map(prev);
+            const e = prev.get(selectedEdgeId);
+            newEdges.set(selectedEdgeId, { ...e, weight: newWeight });
+            return newEdges;
+          });
+          setStatus(`Edge ${selectedEdgeId} weight: ${newWeight}`);
+        } else if (selectedNodeId !== null) {
+          ev.preventDefault();
+          deleteNode(selectedNodeId);
+        }
+      }
+      // Enter deselects edge
+      if (ev.key === "Enter" && selectedEdgeId !== null) {
+        ev.preventDefault();
+        setSelectedEdgeId(null);
+        edgeTypingRef.current = false;
       }
     };
     window.addEventListener("keydown", handler);
@@ -219,6 +315,12 @@ function widget_graph_default(props) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
     ctx.save();
+    // Apply zoom + pan
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    ctx.translate(cx + pan.x, cy + pan.y);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-cx, -cy);
     ctx.lineWidth = 2;
     edges.forEach((edgeData, key) => {
       const { color } = edgeData;
@@ -227,8 +329,17 @@ function widget_graph_default(props) {
       const na = nodes.find((n) => n.id === a);
       const nb = nodes.find((n) => n.id === b);
       if (!na || !nb) return;
-      const isSelectedEdge = selectMode && selectedEdges.has(key);
-      ctx.strokeStyle = isSelectedEdge ? "rgba(250, 204, 21, 0.95)"
+      const isSubgraphEdge = selectMode === "subgraph" && selectedEdges.has(key);
+      const isWalkEdge = selectMode === "walk" && walkPath.length >= 2 && (() => {
+        for (let idx = 0; idx < walkPath.length - 1; idx++) {
+          const wKey = directed ? sortedKey(walkPath[idx], walkPath[idx + 1]) : sortedKey(walkPath[idx], walkPath[idx + 1]);
+          if (wKey === key) return true;
+        }
+        return false;
+      })();
+      const isSelectedEdge = isSubgraphEdge || isWalkEdge || selectedEdgeId === key;
+      ctx.strokeStyle = isWalkEdge ? "rgba(34, 197, 94, 0.95)"
+        : isSelectedEdge ? "rgba(250, 204, 21, 0.95)"
         : color === "blue" ? "rgba(96, 165, 250, 0.85)" : "rgba(248, 113, 113, 0.9)";
       ctx.lineWidth = isSelectedEdge ? 4 : 2;
       ctx.beginPath();
@@ -245,31 +356,32 @@ function widget_graph_default(props) {
       // Draw arrowhead for directed edges
       if (directed && color === "red") {
         ctx.fillStyle = ctx.strokeStyle;
-        drawArrowhead(ctx, fromNode.x, fromNode.y, toNode.x, toNode.y, 16);
+        drawArrowhead(ctx, fromNode.x, fromNode.y, toNode.x, toNode.y, 22);
       }
       // Draw weight label for weighted edges
       if (weighted && edgeData.weight !== undefined && color === "red") {
         const mx = (fromNode.x + toNode.x) / 2;
         const my = (fromNode.y + toNode.y) / 2;
-        ctx.fillStyle = "#fef9c3";
+        const isEdgeSelected = selectedEdgeId === key;
         ctx.font = "bold 12px system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        // Background pill for readability
         const label = String(edgeData.weight);
         const tw = ctx.measureText(label).width + 8;
-        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+        // Background pill — highlighted yellow when selected
+        ctx.fillStyle = isEdgeSelected ? "rgba(250, 204, 21, 0.95)" : "rgba(15, 23, 42, 0.85)";
         ctx.beginPath();
         ctx.arc(mx, my, Math.max(tw / 2, 10), 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = "#fef9c3";
+        ctx.fillStyle = isEdgeSelected ? "#0b1224" : "#fef9c3";
         ctx.fillText(label, mx, my);
       }
     });
     nodes.forEach((node, index) => {
-      const radius = 16;
+      const radius = 22;
       const isSelected = node.id === selectedNodeId;
-      const isSubgraphVert = selectMode && selectedVerts.has(node.id);
+      const isSubgraphVert = (selectMode === "subgraph" && selectedVerts.has(node.id)) ||
+        (selectMode === "walk" && walkPath.includes(node.id));
       const gradient = ctx.createRadialGradient(
         node.x - 6,
         node.y - 6,
@@ -287,27 +399,42 @@ function widget_graph_default(props) {
       ctx.lineWidth = isSubgraphVert ? 3 : 2;
       ctx.strokeStyle = isSubgraphVert ? "#fef9c3" : isSelected ? "#fef9c3" : "rgba(255,255,255,0.6)";
       ctx.stroke();
-      ctx.fillStyle = "#0b1224";
-      ctx.font = "bold 13px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(index.toString(), node.x, node.y);
+      if (showLabels) {
+        ctx.fillStyle = "#0b1224";
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(index.toString(), node.x, node.y);
+      }
     });
     ctx.restore();
-  }, [nodes, edges, selectedNodeId, graphMode, directed, weighted, canvasSize, selectMode, selectedEdges, selectedVerts]);
+  }, [nodes, edges, selectedNodeId, selectedEdgeId, graphMode, directed, weighted, canvasSize, selectMode, selectedEdges, selectedVerts, walkPath, zoom, pan, showLabels]);
   React.useEffect(() => {
     draw();
   }, [draw]);
+  const screenToWorld = (sx, sy) => {
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    return {
+      x: (sx - cx - pan.x) / zoom + cx,
+      y: (sy - cy - pan.y) / zoom + cy
+    };
+  };
   const findNodeAt = (x, y) => {
-    const radius = 18;
-    return nodes.find((node) => {
-      const dx = node.x - x;
-      const dy = node.y - y;
-      return Math.hypot(dx, dy) <= radius;
-    });
+    let closest = null;
+    let closestDist = Infinity;
+    const maxRadius = 28;
+    for (const node of nodes) {
+      const dist = Math.hypot(node.x - x, node.y - y);
+      if (dist <= maxRadius && dist < closestDist) {
+        closest = node;
+        closestDist = dist;
+      }
+    }
+    return closest;
   };
   const findEdgeAt = (x, y) => {
-    const threshold = 10;
+    const threshold = 30;
     let closest = null;
     let closestDist = Infinity;
     edges.forEach((edgeData, key) => {
@@ -335,9 +462,14 @@ function widget_graph_default(props) {
   };
   const addNode = (x, y) => {
     pushHistory();
-    const nextId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 0;
-    const newNode = { id: nextId, x, y };
-    setNodes((prev) => [...prev, newNode]);
+    setNodes((prev) => {
+      // Don't create nodes too close to existing ones (2 * visual radius)
+      for (const node of prev) {
+        if (Math.hypot(node.x - x, node.y - y) < 44) return prev;
+      }
+      const nextId = prev.length > 0 ? Math.max(...prev.map((n) => n.id)) + 1 : 0;
+      return [...prev, { id: nextId, x, y }];
+    });
     if (graphMode === "colored") {
       setEdges((prev) => {
         const newEdges = new Map(prev);
@@ -405,8 +537,9 @@ function widget_graph_default(props) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvasSize.width / rect.width;
     const scaleY = canvasSize.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    const sx = (e2.clientX - rect.left) * scaleX;
+    const sy = (e2.clientY - rect.top) * scaleY;
+    const { x, y } = screenToWorld(sx, sy);
     const node = findNodeAt(x, y);
     if (e2.button === 2) {
       if (node) deleteNode(node.id);
@@ -427,8 +560,9 @@ function widget_graph_default(props) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvasSize.width / rect.width;
     const scaleY = canvasSize.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    const sx = (e2.clientX - rect.left) * scaleX;
+    const sy = (e2.clientY - rect.top) * scaleY;
+    const { x, y } = screenToWorld(sx, sy);
     const moved = Math.hypot(x - dragStart.x, y - dragStart.y) > 3;
     if (moved && !dragHistorySavedRef.current) {
       pushHistory();
@@ -438,11 +572,13 @@ function widget_graph_default(props) {
     if (!isDragging && !moved) return;
     setNodes((prev) => prev.map((node) => {
       if (node.id === draggingNodeId) {
-        return {
-          ...node,
-          x: clamp(x + dragOffset.x, 20, canvasSize.width - 20),
-          y: clamp(y + dragOffset.y, 20, canvasSize.height - 20)
-        };
+        const newX = clamp(x + dragOffset.x, 20, canvasSize.width - 20);
+        const newY = clamp(y + dragOffset.y, 20, canvasSize.height - 20);
+        // Prevent dragging on top of another node
+        const tooClose = prev.some((other) =>
+          other.id !== node.id && Math.hypot(other.x - newX, other.y - newY) < 44);
+        if (tooClose) return node;
+        return { ...node, x: newX, y: newY };
       }
       return node;
     }));
@@ -454,16 +590,46 @@ function widget_graph_default(props) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvasSize.width / rect.width;
     const scaleY = canvasSize.height / rect.height;
-    const x = (e2.clientX - rect.left) * scaleX;
-    const y = (e2.clientY - rect.top) * scaleY;
+    const sx = (e2.clientX - rect.left) * scaleX;
+    const sy = (e2.clientY - rect.top) * scaleY;
+    const { x, y } = screenToWorld(sx, sy);
     const node = findNodeAt(x, y);
     if (draggingNodeId !== null && isDragging) {
       setIsDragging(false);
       setDraggingNodeId(null);
       return;
     }
+    // Walk selection mode: click vertices in order to build a path
+    if (selectMode === "walk") {
+      if (node) {
+        setWalkPath((prev) => {
+          if (prev.length === 0) return [node.id];
+          const last = prev[prev.length - 1];
+          if (node.id === last) {
+            // Click same vertex: undo last step
+            return prev.slice(0, -1);
+          }
+          // Check adjacency: there must be an edge from last to node
+          const key = sortedKey(last, node.id);
+          const edge = edges.get(key);
+          if (edge && edge.color === "red") {
+            if (directed && edge.from !== undefined) {
+              if (edge.from === last && edge.to === node.id) return [...prev, node.id];
+            } else {
+              return [...prev, node.id];
+            }
+          }
+          setStatus(`No edge from ${last} to ${node.id}`);
+          return prev;
+        });
+        setStatus(`Walk: [${walkPath.join(" → ")}${walkPath.length > 0 ? " → " : ""}${node.id}]`);
+      }
+      setIsDragging(false);
+      setDraggingNodeId(null);
+      return;
+    }
     // Subgraph selection mode: click to select/deselect edges and vertices
-    if (selectMode) {
+    if (selectMode === "subgraph") {
       if (node) {
         setSelectedVerts((prev) => {
           const next = new Set(prev);
@@ -481,7 +647,6 @@ function widget_graph_default(props) {
             else next.add(edgeKey);
             return next;
           });
-          // Auto-select both endpoints when an edge is selected
           const [aId, bId] = edgeKey.split("-").map(Number);
           setSelectedVerts((prev) => {
             const next = new Set(prev);
@@ -499,20 +664,37 @@ function widget_graph_default(props) {
     if (node) {
       if (selectedNodeId === null) {
         setSelectedNodeId(node.id);
+        setSelectedEdgeId(null);
         setStatus(`Selected node ${node.id}`);
       } else {
         toggleEdge(selectedNodeId, node.id);
         setSelectedNodeId(null);
       }
-    } else {
-      addNode(x, y);
-      setSelectedNodeId(null);
+    } else if (draggingNodeId === null) {
+      const edgeKey = findEdgeAt(x, y);
+      if (edgeKey) {
+        setSelectedEdgeId(edgeKey);
+        setSelectedNodeId(null);
+        edgeTypingRef.current = false;
+        const edge = edges.get(edgeKey);
+        const w = edge && edge.weight !== undefined ? edge.weight : 1;
+        setStatus(`Selected edge ${edgeKey} (weight: ${w}) — type a number to change`);
+      } else {
+        addNode(x, y);
+        setSelectedEdgeId(null);
+        setSelectedNodeId(null);
+      }
     }
     setIsDragging(false);
     setDraggingNodeId(null);
   };
   const handleContextMenu = (e2) => {
     e2.preventDefault();
+  };
+  const handleWheel = (e2) => {
+    e2.preventDefault();
+    const delta = e2.deltaY > 0 ? 0.9 : 1.1;
+    setZoom((prev) => Math.max(0.3, Math.min(3, prev * delta)));
   };
   const applyCircleLayout = () => {
     const n = nodes.length;
@@ -632,6 +814,28 @@ function widget_graph_default(props) {
     }
     setGraphMode(newMode);
   };
+  const buildWalkLean = () => {
+    if (walkPath.length < 2) return null;
+    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
+    if (directed) {
+      // Directed: Walk.cons (v := next) (by decide) ...
+      let result = "Walk.nil";
+      for (let i = walkPath.length - 2; i >= 0; i--) {
+        const vIdx = idToIndex.get(walkPath[i + 1]);
+        result = `Walk.cons (v := ${vIdx}) (by decide) (${result})`;
+      }
+      return result;
+    } else {
+      // Undirected: SimpleGraph.Walk.cons (u := cur) (v := next) (by decide) ...
+      let result = "SimpleGraph.Walk.nil";
+      for (let i = walkPath.length - 2; i >= 0; i--) {
+        const uIdx = idToIndex.get(walkPath[i]);
+        const vIdx = idToIndex.get(walkPath[i + 1]);
+        result = `SimpleGraph.Walk.cons (u := ${uIdx}) (v := ${vIdx}) (by decide) (${result})`;
+      }
+      return result;
+    }
+  };
   const buildSubgraphMatrixLean = () => {
     const n = nodes.length;
     if (n === 0 || selectedEdges.size === 0) return null;
@@ -641,7 +845,13 @@ function widget_graph_default(props) {
       const [a, b] = key.split("-").map(Number);
       const i = idToIndex.get(a);
       const j = idToIndex.get(b);
-      if (i !== undefined && j !== undefined) {
+      if (i === undefined || j === undefined) return;
+      const edge = edges.get(key);
+      if (directed && edge && edge.from !== undefined) {
+        const fi = idToIndex.get(edge.from);
+        const ti = idToIndex.get(edge.to);
+        if (fi !== undefined && ti !== undefined) matrix[fi][ti] = 1;
+      } else {
         matrix[i][j] = 1;
         matrix[j][i] = 1;
       }
@@ -732,7 +942,6 @@ function widget_graph_default(props) {
     if (init.length === 0 && nodes.length === 0) return false;
     if (init.length !== nodes.length) return true;
     const n = nodes.length;
-    const idToIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
         const initVal = init[i] && init[i][j] ? init[i][j] : 0;
@@ -742,7 +951,16 @@ function widget_graph_default(props) {
           const key = sortedKey(ni.id, nj.id);
           const edge = edges.get(key);
           if (edge && edge.color === "red") {
-            curVal = weighted && edge.weight !== undefined ? edge.weight : 1;
+            if (directed && edge.from !== undefined) {
+              // For directed: only count if this is the correct direction
+              const fromIdx = nodes.findIndex((nd) => nd.id === edge.from);
+              const toIdx = nodes.findIndex((nd) => nd.id === edge.to);
+              if (fromIdx === i && toIdx === j) {
+                curVal = weighted && edge.weight !== undefined ? edge.weight : 1;
+              }
+            } else {
+              curVal = weighted && edge.weight !== undefined ? edge.weight : 1;
+            }
           }
         }
         if (initVal !== curVal) return true;
@@ -751,15 +969,18 @@ function widget_graph_default(props) {
     return false;
   };
   const sendToLean = () => {
-    if (!verifyExport()) {
+    const graphChanged = hasGraphChanged();
+    if (graphChanged && !verifyExport()) {
       setStatus("Export verification failed: edge data mismatch");
       return;
     }
-    const graphChanged = hasGraphChanged();
     setStatus("Sending to Lean...");
     rs.call("graphWidget.updateGraph", {
       adjMatrix: graphChanged ? buildAdjMatrixLean() : "",
-      subgraphMatrix: buildSubgraphMatrixLean() || "",
+      subgraphMatrix: selectMode === "subgraph" ? (buildSubgraphMatrixLean() || "") : "",
+      walkExpr: selectMode === "walk" ? (buildWalkLean() || "") : "",
+      walkStart: selectMode === "walk" && walkPath.length >= 2 ? String(nodes.findIndex((nd) => nd.id === walkPath[0])) : "",
+      walkEnd: selectMode === "walk" && walkPath.length >= 2 ? String(nodes.findIndex((nd) => nd.id === walkPath[walkPath.length - 1])) : "",
       graphIdent: props.graphIdent || "",
       directed: directed,
       weighted: weighted,
@@ -945,7 +1166,21 @@ function widget_graph_default(props) {
           e("input", {
             type: "checkbox",
             checked: weighted,
-            onChange: (ev) => setWeighted(ev.target.checked),
+            onChange: (ev) => {
+              const nowWeighted = ev.target.checked;
+              setWeighted(nowWeighted);
+              if (nowWeighted) {
+                setEdges((prev) => {
+                  const newEdges = new Map(prev);
+                  newEdges.forEach((val, key) => {
+                    if (val.color === "red" && val.weight === undefined) {
+                      newEdges.set(key, { ...val, weight: 1 });
+                    }
+                  });
+                  return newEdges;
+                });
+              }
+            },
             style: { accentColor: "#6366f1" }
           }),
           "Weighted"
@@ -967,25 +1202,40 @@ function widget_graph_default(props) {
             }
           })
         ]) : null,
-        e("button", {
-          onClick: () => {
-            setSelectMode(!selectMode);
-            if (selectMode) {
-              setStatus("Exited subgraph selection mode");
-            } else {
-              setSelectedEdges(new Set());
-              setSelectedVerts(new Set());
-              setSelectedNodeId(null);
-              setStatus("Subgraph selection mode: click edges/vertices to select");
-            }
+        e("select", {
+          value: selectMode,
+          onChange: (ev) => {
+            const mode = ev.target.value;
+            setSelectMode(mode);
+            setSelectedEdges(new Set());
+            setSelectedVerts(new Set());
+            setWalkPath([]);
+            setSelectedNodeId(null);
+            if (mode === "subgraph") setStatus("Subgraph mode: click edges/vertices to select");
+            else if (mode === "walk") setStatus("Walk mode: click vertices in order to build a path");
+            else setStatus("Selection off");
           },
-          style: selectMode ? {
-            ...btnStyle,
-            background: "rgba(250, 204, 21, 0.2)",
-            border: "1px solid rgba(250, 204, 21, 0.4)",
-            color: "#fde047"
-          } : btnStyle
-        }, selectMode ? "Exit Select" : "Select Subgraph"),
+          style: {
+            border: selectMode !== "none" ? "1px solid rgba(250, 204, 21, 0.4)" : "1px solid rgba(255, 255, 255, 0.12)",
+            background: selectMode !== "none" ? "rgba(250, 204, 21, 0.2)" : "rgba(255, 255, 255, 0.06)",
+            color: selectMode !== "none" ? "#fde047" : "#e2e8f0",
+            padding: "7px 12px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            fontWeight: "500",
+            cursor: "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            paddingRight: "28px",
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "right 10px center"
+          }
+        }, [
+          e("option", { value: "none" }, "No selection"),
+          e("option", { value: "subgraph" }, "Select Subgraph"),
+          e("option", { value: "walk" }, "Select Walk")
+        ]),
         e("button", {
           onClick: applyCircleLayout,
           style: btnStyle
@@ -993,7 +1243,16 @@ function widget_graph_default(props) {
         e("button", {
           onClick: applySpringLayout,
           style: btnStyle
-        }, "Spring layout")
+        }, "Spring layout"),
+        e("button", {
+          onClick: () => setShowLabels(!showLabels),
+          style: showLabels ? {
+            ...btnStyle,
+            background: "rgba(52, 211, 153, 0.2)",
+            border: "1px solid rgba(52, 211, 153, 0.4)",
+            color: "#6ee7b7"
+          } : btnStyle
+        }, "Labels")
       ]) : null
     ]),
     // Canvas
@@ -1002,20 +1261,23 @@ function widget_graph_default(props) {
       justifyContent: "center",
       background: "#080d1a",
       borderTop: "1px solid rgba(255, 255, 255, 0.03)",
-      borderBottom: "1px solid rgba(255, 255, 255, 0.03)"
+      borderBottom: "1px solid rgba(255, 255, 255, 0.03)",
+      overflow: "auto",
+      maxHeight: "450px"
     } },
       e("canvas", {
         ref: canvasRef,
         onMouseDown: handleMouseDown,
         onMouseMove: handleMouseMove,
         onMouseUp: handleMouseUp,
+        onWheel: handleWheel,
         onContextMenu: handleContextMenu,
         style: {
           display: "block",
-          width: canvasSize.width + "px",
-          maxWidth: "100%",
-          height: "auto",
-          aspectRatio: canvasSize.width + " / " + canvasSize.height,
+          width: Math.round(canvasSize.width * zoom) + "px",
+          height: Math.round(canvasSize.height * zoom) + "px",
+          minWidth: canvasSize.width + "px",
+          minHeight: canvasSize.height + "px",
           background: "radial-gradient(ellipse at 30% 20%, rgba(99, 102, 241, 0.04), transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(244, 63, 94, 0.03), transparent 50%), #080d1a",
           cursor: readOnly ? "default" : "crosshair"
         }
@@ -1030,6 +1292,29 @@ function widget_graph_default(props) {
       borderTop: "1px solid rgba(255, 255, 255, 0.06)"
     } }, readOnly ? [
       e("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } }, [
+        e("select", {
+          value: graphMode,
+          onChange: (ev) => switchGraphMode(ev.target.value),
+          style: {
+            border: "1px solid rgba(255, 255, 255, 0.12)",
+            background: "rgba(255, 255, 255, 0.06)",
+            color: "#e2e8f0",
+            padding: "7px 12px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            fontWeight: "500",
+            cursor: "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            paddingRight: "28px",
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "right 10px center"
+          }
+        }, [
+          e("option", { value: "simple" }, "Simple graph"),
+          e("option", { value: "colored" }, "Bi-colored graph")
+        ]),
         (!directed && !weighted) ? e("button", {
           onClick: () => {
             navigator.clipboard.writeText(graph6String);
@@ -1050,7 +1335,26 @@ function widget_graph_default(props) {
             setStatus("Copied edge list to clipboard");
           },
           style: btnStyle
-        }, "Copy edges")
+        }, "Copy edges"),
+        e("button", {
+          onClick: () => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            // Export at 4x resolution for print quality
+            const dpr = 4;
+            const exportCanvas = document.createElement("canvas");
+            exportCanvas.width = canvasSize.width * dpr;
+            exportCanvas.height = canvasSize.height * dpr;
+            const ctx = exportCanvas.getContext("2d");
+            ctx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+            const link = document.createElement("a");
+            link.download = "graph.png";
+            link.href = exportCanvas.toDataURL("image/png");
+            link.click();
+            setStatus("Exported high-res PNG (4x)");
+          },
+          style: btnStyle
+        }, "Export PNG")
       ]),
       e("div", { style: {
         fontSize: "10px",
@@ -1102,7 +1406,26 @@ function widget_graph_default(props) {
             setStatus("Copied adjacency matrix to clipboard");
           },
           style: btnStyle
-        }, "Copy matrix")
+        }, "Copy matrix"),
+        e("button", {
+          onClick: () => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            // Export at 4x resolution for print quality
+            const dpr = 4;
+            const exportCanvas = document.createElement("canvas");
+            exportCanvas.width = canvasSize.width * dpr;
+            exportCanvas.height = canvasSize.height * dpr;
+            const ctx = exportCanvas.getContext("2d");
+            ctx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+            const link = document.createElement("a");
+            link.download = "graph.png";
+            link.href = exportCanvas.toDataURL("image/png");
+            link.click();
+            setStatus("Exported high-res PNG (4x)");
+          },
+          style: btnStyle
+        }, "Export PNG")
       ]),
       e("div", { style: {
         fontSize: "10px",

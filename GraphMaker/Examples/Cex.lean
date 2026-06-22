@@ -6,19 +6,19 @@ namespace CexGraphExamples
 
 -- "No graph on 3 vertices has an edge"
 -- false: Plausible find a graph with an edge.
-lemma no_edge : ∀ G : SimpleGraph (Fin 3), ¬G.Adj 0 1 := by
+example: ∀ G : SimpleGraph (Fin 3), ¬G.Adj 0 1 := by
   cex_graph
 
 -- "Every graph on 4 vertices is triangle-free"
 -- false: Plausible finds K₃ as a subgraph.
-theorem triangle_free :
+example :
     ∀ G : SimpleGraph (Fin 4),
       ∀ i j k : Fin 4, G.Adj i j → G.Adj j k → ¬G.Adj i k := by
   cex_graph
 
 -- "R(3,3) ≤ 5" i.e. every graph on 5 vertices has a triangle or an independent set of size 3.
 -- false: R(3,3) = 6, so there exists a graph on 5 vertices (the cycle C₅) avoiding both.
-theorem ramsey_3_3_5 : RamseyGraphProp 5 3 3 := by
+example: RamseyGraphProp 5 3 3 := by
   unfold RamseyGraphProp
   cex_graph
 
@@ -49,7 +49,6 @@ instance {n : ℕ} (G : SimpleGraph (Fin n)) [DecidableEq (Fin n)] [DecidableRel
       · exact Or.inl h1
       · obtain ⟨a, p, hp⟩ := h h1
         exact Or.inr ⟨a, ⟨p, hp.length_eq.trans (Fintype.card_fin n)⟩, hp⟩⟩
-
-theorem connected_is_hamiltonian :
+example:
     ∀ G : SimpleGraph (Fin 4), G.Connected → G.IsHamiltonian := by
   cex_graph

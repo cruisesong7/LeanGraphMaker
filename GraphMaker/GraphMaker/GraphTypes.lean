@@ -1,6 +1,8 @@
 import Mathlib.Combinatorics.SimpleGraph.Basic
 import Mathlib.Combinatorics.SimpleGraph.AdjMatrix
 import Mathlib.Combinatorics.SimpleGraph.Subgraph
+import Mathlib.Combinatorics.SimpleGraph.Acyclic
+import Mathlib.Combinatorics.SimpleGraph.Connectivity.WalkCounting
 import Mathlib.Combinatorics.Digraph.Basic
 import Mathlib.LinearAlgebra.Matrix.Notation
 
@@ -57,6 +59,9 @@ instance [MulZeroOneClass α] [Nontrivial α] [DecidableEq α] (M : Matrix V V �
 instance [Zero W] [DecidableEq W] (M : Matrix V V W) : DecidableRel (M.toDigraph).Adj :=
   fun u v => inferInstanceAs (Decidable (M u v ≠ 0))
 
+instance [Zero W] [DecidableEq W] (M : Matrix V V W) : DecidableRel (M.toWeightedDigraph).Adj :=
+  fun u v => inferInstanceAs (Decidable (M u v ≠ 0))
+
 instance [Zero W] [DecidableEq W] [LinearOrder W] (M : Matrix V V W)
     (hsymm : M.IsSymm) (hdiag : ∀ x, M x x = 0) :
     DecidableRel (M.toWeightedSimpleGraph hsymm hdiag).toSimpleGraph.Adj :=
@@ -66,6 +71,17 @@ instance SimpleGraph.decidableLE [Fintype V] [DecidableEq V] (G H : SimpleGraph 
     [DecidableRel G.Adj] [DecidableRel H.Adj] : Decidable (G ≤ H) :=
   show Decidable (∀ ⦃v w⦄, G.Adj v w → H.Adj v w) from
     inferInstanceAs (Decidable (∀ v w, G.Adj v w → H.Adj v w))
+
+instance Digraph.decidableLE [Fintype V] [DecidableEq V] (G H : Digraph V)
+    [DecidableRel G.Adj] [DecidableRel H.Adj] : Decidable (G ≤ H) :=
+  show Decidable (∀ ⦃v w⦄, G.Adj v w → H.Adj v w) from
+    inferInstanceAs (Decidable (∀ v w, G.Adj v w → H.Adj v w))
+
+instance SimpleGraph.decidableIsTree [Fintype V] [DecidableEq V] (G : SimpleGraph V)
+    [DecidableRel G.Adj] : Decidable G.IsTree :=
+  decidable_of_iff (G.Connected ∧ G.edgeFinset.card + 1 = Fintype.card V)
+    (by rw [SimpleGraph.isTree_iff_connected_and_card]
+        simp [Nat.card_eq_fintype_card, SimpleGraph.edgeFinset_card])
 
 /-! ## Export functions: graph → matrix -/
 
@@ -112,18 +128,35 @@ def SimpleGraph.subgraphOfMatrix [MulZeroOneClass α] [Nontrivial α]
   SimpleGraph.toSubgraph hAdj.toGraph h
 
 /-- Construct a sub-digraph from a matrix, bundled with the `≤` proof. -/
-def Digraph.subgraphOfMatrix [Zero W] (G : Digraph V) (M : Matrix V V W)
+@[reducible] def Digraph.subgraphOfMatrix [Fintype V] [DecidableEq V] [Zero W] [DecidableEq W]
+    (G : Digraph V) [DecidableRel G.Adj] (M : Matrix V V W)
     (h : M.toDigraph ≤ G := by decide) : { H : Digraph V // H ≤ G } :=
   ⟨M.toDigraph, h⟩
 
 /-- Construct a `SimpleGraph.Subgraph` of the underlying graph of a `WeightedSimpleGraph`. -/
-def WeightedSimpleGraph.subgraphOfMatrix [MulZeroOneClass α] [Nontrivial α]
+@[reducible] def WeightedSimpleGraph.subgraphOfMatrix [MulZeroOneClass α] [Nontrivial α]
     (G : WeightedSimpleGraph V W) (M : Matrix V V α)
     (hAdj : M.IsAdjMatrix := by constructor <;> decide)
     (h : hAdj.toGraph ≤ G.toSimpleGraph := by decide) : G.toSimpleGraph.Subgraph :=
   SimpleGraph.toSubgraph hAdj.toGraph h
 
 /-- Construct a sub-digraph of the underlying `Digraph` of a `WeightedDigraph`. -/
-def WeightedDigraph.subgraphOfMatrix [Zero α] (G : WeightedDigraph V W) (M : Matrix V V α)
+@[reducible] def WeightedDigraph.subgraphOfMatrix [Fintype V] [DecidableEq V] [Zero α] [DecidableEq α]
+    (G : WeightedDigraph V W) [DecidableRel G.Adj] (M : Matrix V V α)
     (h : M.toDigraph ≤ G.toDigraph := by decide) : { H : Digraph V // H ≤ G.toDigraph } :=
   ⟨M.toDigraph, h⟩
+
+instance SimpleGraph.Subgraph.instDecidableRelToSubgraphAdj
+    (H G : SimpleGraph V) [DecidableRel H.Adj] (h : H ≤ G) :
+    DecidableRel (SimpleGraph.toSubgraph H h).Adj :=
+  inferInstanceAs (DecidableRel H.Adj)
+
+instance SimpleGraph.Subgraph.instDecidableRelSpanningCoeAdj
+    {G : SimpleGraph V} (T : G.Subgraph) [DecidableRel T.Adj] :
+    DecidableRel T.spanningCoe.Adj :=
+  inferInstanceAs (DecidableRel T.Adj)
+
+instance SimpleGraph.Subgraph.instFintypeEdgeSetSpanningCoe
+    [Fintype V] [DecidableEq V] {G : SimpleGraph V} (T : G.Subgraph) [DecidableRel T.Adj] :
+    Fintype T.spanningCoe.edgeSet :=
+  SimpleGraph.fintypeEdgeSet T.spanningCoe

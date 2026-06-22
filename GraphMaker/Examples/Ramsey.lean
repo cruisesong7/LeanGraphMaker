@@ -1,5 +1,5 @@
-import FormalRamsey.RamseyGraphs
 import GraphMaker.DrawGraph
+import FormalRamsey.RamseyGraphs
 
 namespace RamseyGraphExamples
 
@@ -20,13 +20,13 @@ counterexample graph of order 2 that does not have the `RamseyGraphProp`—meani
 it has no clique of 2 nor an independent set of 3.
 
 To aid in visualizing these constructions, the concrete counterexamples can be
-inspected directly in the Infoview by invoking the `draw_graph` command.
+constructed directly in the Infoview by invoking the `draw_graph` command, or inspected using the `with_panel_widgets [ProofWidgets.SelectionPanel]`.
 -/
-
 
 theorem R23 : ¬(RamseyGraphProp 2 2 3) := by
   simp only [RamseyGraphProp, not_forall]
-  --draw_graph
+  -- draw_graph
+  with_panel_widgets [ProofWidgets.SelectionPanel]
   let G := readG6 "A?"
   use G
   simp [not_or]
@@ -43,7 +43,13 @@ theorem R23 : ¬(RamseyGraphProp 2 2 3) := by
 theorem R33 : ¬(RamseyGraphProp 5 3 3) := by
   simp only [RamseyGraphProp, not_forall]
   --draw_graph
-  let G := readG6 "Dhc"
+  with_panel_widgets [ProofWidgets.SelectionPanel]
+  let G := Matrix.toSimpleGraph !![
+    0, 1, 0, 0, 1;
+    1, 0, 1, 0, 0;
+    0, 1, 0, 1, 0;
+    0, 0, 1, 0, 1;
+    1, 0, 0, 1, 0]
   use G
   simp [not_or]
   apply And.intro
@@ -71,3 +77,5 @@ theorem R34 : ¬(RamseyGraphProp 8 3 4) := by
     rw [← SimpleGraph.mem_indepSetFinset_iff]
     rw [show G.indepSetFinset 4 = Finset.empty by native_decide]
     exact Finset.notMem_empty T
+
+end RamseyGraphExamples
