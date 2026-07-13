@@ -16,6 +16,31 @@ open Lean Meta Server Elab Tactic
 This file defines the `draw_graph` tactic for interactive graph construction and an expression presenter that visualizes graph expressions.
 -/
 
+/-! ## Layout attribute
+
+`@[graph_layout "concentric"]` on a graph definition records a preferred widget
+layout. `draw_graph` reads this off the head constant of the graph expression and
+applies it by default. Supported layouts: `"circle"`, `"concentric"`, `"hub"`,
+`"cube"`, `"spring"`. -/
+
+/-- Attribute syntax: `@[graph_layout "concentric"]`. -/
+syntax (name := graphLayoutStx) "graph_layout " str : attr
+
+/-- Maps a graph declaration name to its preferred layout string. -/
+initialize graphLayoutAttr : ParametricAttribute String ←
+  registerParametricAttribute {
+    name := `graphLayoutStx
+    descr := "preferred widget layout for a graph declaration"
+    getParam := fun _ stx =>
+      match stx with
+      | `(attr| graph_layout $s:str) => pure s.getString
+      | _ => throwError "invalid graph_layout syntax; expected `@[graph_layout \"concentric\"]`"
+  }
+
+/-- Look up the layout registered for a declaration name (if any). -/
+def getGraphLayout (env : Environment) (n : Name) : Option String :=
+  graphLayoutAttr.getParam? env n
+
 
 /-- Props for the graph widget. -/
 structure GraphWidgetProps where
@@ -25,6 +50,7 @@ structure GraphWidgetProps where
   walkStart : String := ""
   walkEnd : String := ""
   graphIdent : String := ""
+  layout : String := ""
   directed : Bool := false
   weighted : Bool := false
   readOnly : Bool := false
@@ -157,6 +183,49 @@ private def decodeG6 (s : String) : Array (Array Nat) := Id.run do
       bitIdx := bitIdx + 1
   return result
 
+/-- Extract `n` from a `Fin n` expression (as a raw nat literal). -/
+private def finCardOf? (finTy : Expr) : MetaM (Option Nat) := do
+  unless finTy.getAppFn.isConstOf ``Fin do return none
+  let args := finTy.getAppArgs
+  if args.size == 0 then return none
+  let nExpr ← whnf args[0]!
+  return nExpr.rawNatLit?
+
+/-- Evaluate a `SimpleGraph (Fin n)` (or `Digraph (Fin n)`) into an adjacency matrix by
+    computing `G.Adj i j` for every pair via its `DecidableRel` instance.
+    Returns `#[]` if the graph is not over `Fin n` or has no decidable adjacency. -/
+private def evalAdjMatrix (e : Expr) : MetaM (Array (Array Nat)) := do
+  let t ← inferType e
+  let fn := t.getAppFn
+  let isSimple := fn.isConstOf ``SimpleGraph
+  let isDigraph := fn.isConstOf ``Digraph
+  unless isSimple || isDigraph do return #[]
+  let args := t.getAppArgs
+  if args.size == 0 then return #[]
+  let some n ← finCardOf? args[0]! | return #[]
+  let finN := args[0]!            -- the type `Fin n`
+  let nLit := mkNatLit n          -- the nat literal `n`
+  -- Build: (List.finRange n).map (fun i => (List.finRange n).map (fun j => decide (G.Adj i j)))
+  let t ← inferType e
+  let isSimpleGraph := t.getAppFn.isConstOf ``SimpleGraph
+  let matExpr ← withLocalDeclD `i finN fun i => do
+    let inner ← withLocalDeclD `j finN fun j => do
+      let adjIJ ← if isSimpleGraph then
+          mkAppM ``SimpleGraph.Adj #[e, i, j]
+        else
+          mkAppM ``Digraph.Adj #[e, i, j]
+      let inst ← synthInstance (← mkAppM ``Decidable #[adjIJ])
+      let dec ← mkAppOptM ``decide #[adjIJ, inst]
+      mkLambdaFVars #[j] dec
+    let finRangeN ← mkAppM ``List.finRange #[nLit]
+    let rowExpr ← mkAppM ``List.map #[inner, finRangeN]
+    mkLambdaFVars #[i] rowExpr
+  let finRangeN ← mkAppM ``List.finRange #[nLit]
+  let fullExpr ← mkAppM ``List.map #[matExpr, finRangeN]
+  let listType ← inferType fullExpr
+  let boolMatrix ← unsafe evalExpr (List (List Bool)) listType fullExpr
+  return boolMatrix.toArray.map (fun row => row.toArray.map (fun b => if b then 1 else 0))
+
 /-- Extract adjacency matrix data from a graph or matrix expression. -/
 private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
   let t ← inferType e
@@ -174,7 +243,7 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
         match arg with
         | .lit (.strVal s) => return decodeG6 s
         | _ => pure ()
-    -- Otherwise look for a Matrix-typed argument with vecCons
+    -- Look for a Matrix-typed argument with vecCons
     let args := e.getAppArgs
     for arg in args do
       let argT ← try inferType arg catch _ => pure (mkConst ``Unit)
@@ -184,6 +253,13 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
           let rows ← extractRows vc
           if rows.size > 0 then return rows
         | none => pure ()
+    -- Fallback: evaluate the adjacency relation directly (handles named graphs
+    -- like `cycleGraph n`, complete graphs, complements, etc. — any
+    -- `SimpleGraph`/`Digraph` over `Fin n` with a `DecidableRel` instance).
+    try
+      let rows ← evalAdjMatrix e
+      if rows.size > 0 then return rows
+    catch _ => pure ()
     return #[]
 
 /-! ## Shared widget helpers -/
@@ -192,7 +268,7 @@ private def extractMatrixFromExpr (e : Expr) : MetaM (Array (Array Nat)) := do
 def showGraphWidget (stx : Syntax) (replaceRange : Lsp.Range)
     (rows : Array (Array Nat) := #[])
     (directed := false) (weighted := false) (readOnly := false)
-    (graphIdent : String := "") : TacticM Unit := do
+    (graphIdent : String := "") (layout : String := "") : TacticM Unit := do
   let props : GraphWidgetProps :=
     { adjMatrix := if readOnly then
         let rowStrs := rows.map fun row =>
@@ -200,6 +276,7 @@ def showGraphWidget (stx : Syntax) (replaceRange : Lsp.Range)
         "!![" ++ String.intercalate ";\n    " rowStrs.toList ++ "]"
       else ""
       «graphIdent» := graphIdent
+      «layout» := layout
       «directed» := directed
       «weighted» := weighted
       «readOnly» := readOnly
@@ -218,29 +295,42 @@ syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
   let mut rows : Array (Array Nat) := #[]
   let mut directed := false
   let mut weighted := false
+  let mut layout := ""
 
   -- If an ident is given, pre-populate the widget with that graph (use last match for shadowing)
   if !stx[1].isNone then
     let name := stx[1][0].getId
     let goal ← getMainGoal
     let lctx ← goal.getDecl >>= fun md => pure md.lctx
+    -- First look for a local `let`-bound value with this name (respecting shadowing).
     let mut lastVal : Option Expr := none
     for decl in lctx do
       let some val := decl.value? | continue
       if decl.userName != name then continue
       lastVal := some val
-    if let some val := lastVal then
+    -- Otherwise resolve as a global constant (top-level `def`).
+    if lastVal.isNone then
+      let fullName? ← (do
+          try pure (some (← resolveGlobalConstNoOverload (mkIdent name)))
+          catch _ => pure none)
+      if let some fullName := fullName? then
+        lastVal := some (mkConst fullName)
+    if let some origVal := lastVal then
+      -- Layout is read from the ORIGINAL value's head constant (before whnf unfolds it).
+      let headName := origVal.getAppFn.constName?.getD .anonymous
+      layout := (getGraphLayout (← getEnv) headName).getD ""
       let val ← goal.withContext do
-        let rows ← extractMatrixFromExpr val
-        if rows.size > 0 then return val
-        whnf val
+        let rows ← extractMatrixFromExpr origVal
+        if rows.size > 0 then return origVal
+        whnf origVal
       let (d, w) ← goal.withContext do classifyGraphType val
       directed := d
       weighted := w
       rows ← goal.withContext do extractMatrixFromExpr val
 
   let identName := if !stx[1].isNone then stx[1][0].getId.toString else ""
-  showGraphWidget stx replaceRange rows directed weighted (graphIdent := identName)
+  showGraphWidget stx replaceRange rows directed weighted
+    (graphIdent := identName) (layout := layout)
 
 /-! ## Graph expression presenter (shift-click to visualize) -/
 

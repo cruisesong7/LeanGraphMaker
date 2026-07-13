@@ -117,6 +117,6 @@ example : let G := (Matrix.toWeightedSimpleGraph !![0, 3, 5, 0;
     (0 : ℕ), 4, 1, 0])
   ∃ (p : G.toSimpleGraph.Walk 0 3), G.walkWeight p < 7 := by
   intro G
-  --draw_Graph G
+  --draw_graph G
   let p : G.toSimpleGraph.Walk 0 3 := SimpleGraph.Walk.cons (u := 0) (v := 1) (by decide) (SimpleGraph.Walk.cons (u := 1) (v := 2) (by decide) (SimpleGraph.Walk.cons (u := 2) (v := 3) (by decide) (SimpleGraph.Walk.nil)))
   exact ⟨p, by decide⟩

@@ -105,6 +105,71 @@ var btnStyle = {
   transition: "all 0.2s ease"
 };
 
+// Pure layout: returns repositioned nodes for a given layout name.
+// (The interactive apply*Layout functions wrap this with setNodes/pushHistory.)
+function layoutNodes(nodes, edges, name, W = 600, H = 400) {
+  const n = nodes.length;
+  if (n === 0 || !name) return nodes;
+  const cx = W / 2, cy = H / 2;
+  const R = Math.min(W, H) / 2 - 40;
+  if (name === "circle") {
+    return nodes.map((nd, i) => {
+      const a = 2 * Math.PI * i / n;
+      return { ...nd, x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+    });
+  }
+  if (name === "concentric") {
+    const outer = Math.ceil(n / 2);
+    return nodes.map((nd, i) => {
+      if (i < outer) {
+        const a = 2 * Math.PI * i / outer - Math.PI / 2;
+        return { ...nd, x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+      }
+      const k = i - outer, inner = n - outer;
+      const a = 2 * Math.PI * k / inner - Math.PI / 2;
+      return { ...nd, x: cx + R * 0.5 * Math.cos(a), y: cy + R * 0.5 * Math.sin(a) };
+    });
+  }
+  if (name === "hub") {
+    const degree = (id) => {
+      let d = 0;
+      edges.forEach((e, key) => {
+        if (e.color !== "red") return;
+        const [a, b] = key.split("-").map(Number);
+        if (a === id || b === id) d++;
+      });
+      return d;
+    };
+    let hubId = nodes[0].id, hubDeg = -1;
+    for (const nd of nodes) { const d = degree(nd.id); if (d > hubDeg) { hubDeg = d; hubId = nd.id; } }
+    const rim = nodes.filter((nd) => nd.id !== hubId);
+    return nodes.map((nd) => {
+      if (nd.id === hubId) return { ...nd, x: cx, y: cy };
+      const k = rim.findIndex((r) => r.id === nd.id);
+      const a = 2 * Math.PI * k / rim.length - Math.PI / 2;
+      return { ...nd, x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+    });
+  }
+  if (name === "cube") {
+    const d = Math.round(Math.log2(n));
+    if (2 ** d !== n) return layoutNodes(nodes, edges, "concentric", W, H);
+    const basis = [{ x: 1, y: 0 }, { x: 0, y: 1 }, { x: 0.45, y: 0.45 }, { x: 0.45, y: -0.45 }];
+    let maxExt = 0;
+    for (let bit = 0; bit < d; bit++) maxExt += Math.abs((basis[bit] || {}).x || 0);
+    return nodes.map((nd, i) => {
+      let x = 0, y = 0;
+      for (let bit = 0; bit < d; bit++) {
+        const set = (i >> bit) & 1 ? 1 : -1;
+        const b = basis[bit] || { x: 0, y: 0 };
+        x += set * b.x; y += set * b.y;
+      }
+      const norm = Math.max(1, maxExt);
+      return { ...nd, x: cx + (x / norm) * R * 0.9, y: cy + (y / norm) * R * 0.9 };
+    });
+  }
+  return nodes;  // spring / unknown → leave as-is (handled interactively)
+}
+
 function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected, bicolored) {
   const n = matrix.length;
   if (n === 0) return { nodes: [], edges: new Map() };
@@ -412,6 +477,40 @@ function widget_graph_default(props) {
   React.useEffect(() => {
     draw();
   }, [draw]);
+  // Re-initialize when the incoming graph changes (e.g. cursor moves between two
+  // `draw_graph` calls). React reuses the component instance, so `useState` initial
+  // values are stale — reset explicitly on a new matrix/graph6 signature.
+  const initSig = JSON.stringify(initMatrix) + "|" + (props.graph6 || "") + "|" +
+    (props.directed ? "d" : "") + (props.weighted ? "w" : "");
+  const prevInitSig = React.useRef(initSig);
+  const didInitLayout = React.useRef(false);
+  React.useEffect(() => {
+    if (prevInitSig.current !== initSig) {
+      prevInitSig.current = initSig;
+      const g = initMatrix.length > 0
+        ? initFromMatrix(initMatrix, canvasSize.width, canvasSize.height, props.directed || false, false)
+        : parseGraph6(props.graph6 || "?", canvasSize.width, canvasSize.height);
+      // Apply the default layout to the fresh nodes before committing state.
+      setNodes(layoutNodes(g.nodes, g.edges, props.layout, canvasSize.width, canvasSize.height));
+      setEdges(g.edges);
+      setDirected(props.directed || false);
+      setWeighted(props.weighted || false);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      setSelectMode("none");
+      setWalkPath([]);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      didInitLayout.current = true;
+    }
+  }, [initSig]);
+  // Apply the default layout once on the very first mount.
+  React.useEffect(() => {
+    if (!didInitLayout.current && props.layout && nodes.length > 0) {
+      didInitLayout.current = true;
+      setNodes((prev) => layoutNodes(prev, edges, props.layout, canvasSize.width, canvasSize.height));
+    }
+  }, [nodes.length]);
   const screenToWorld = (sx, sy) => {
     const cx = canvasSize.width / 2;
     const cy = canvasSize.height / 2;
@@ -713,6 +812,94 @@ function widget_graph_default(props) {
     }));
     setStatus("Applied circle layout");
   };
+  const applyConcentricLayout = () => {
+    const n = nodes.length;
+    if (n === 0) return;
+    pushHistory();
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    const outerR = Math.min(canvasSize.width, canvasSize.height) / 2 - 40;
+    const innerR = outerR * 0.5;
+    // Split: first half on outer ring, second half on inner ring.
+    const outerCount = Math.ceil(n / 2);
+    setNodes((prev) => prev.map((node, i) => {
+      if (i < outerCount) {
+        const angle = 2 * Math.PI * i / outerCount - Math.PI / 2;
+        return { ...node, x: cx + outerR * Math.cos(angle), y: cy + outerR * Math.sin(angle) };
+      } else {
+        const k = i - outerCount;
+        const innerCount = n - outerCount;
+        const angle = 2 * Math.PI * k / innerCount - Math.PI / 2;
+        return { ...node, x: cx + innerR * Math.cos(angle), y: cy + innerR * Math.sin(angle) };
+      }
+    }));
+    setStatus("Applied concentric layout (outer/inner rings)");
+  };
+  const applyHubLayout = () => {
+    const n = nodes.length;
+    if (n === 0) return;
+    pushHistory();
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    const radius = Math.min(canvasSize.width, canvasSize.height) / 2 - 40;
+    // Vertex 0 (or highest-degree) at center, rest on a circle.
+    const degree = (id) => {
+      let d = 0;
+      edges.forEach((e, key) => {
+        if (e.color !== "red") return;
+        const [a, b] = key.split("-").map(Number);
+        if (a === id || b === id) d++;
+      });
+      return d;
+    };
+    let hubId = nodes[0].id, hubDeg = -1;
+    for (const nd of nodes) {
+      const d = degree(nd.id);
+      if (d > hubDeg) { hubDeg = d; hubId = nd.id; }
+    }
+    const rim = nodes.filter((nd) => nd.id !== hubId);
+    setNodes((prev) => prev.map((node) => {
+      if (node.id === hubId) return { ...node, x: cx, y: cy };
+      const k = rim.findIndex((r) => r.id === node.id);
+      const angle = 2 * Math.PI * k / rim.length - Math.PI / 2;
+      return { ...node, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+    }));
+    setStatus("Applied hub layout (center + rim)");
+  };
+  const applyCubeLayout = () => {
+    const n = nodes.length;
+    if (n === 0) return;
+    // Only meaningful when n = 2^d; place each vertex by its bit pattern.
+    const d = Math.round(Math.log2(n));
+    if (2 ** d !== n) { applyConcentricLayout(); return; }
+    pushHistory();
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    const size = Math.min(canvasSize.width, canvasSize.height) / 2 - 40;
+    // Assign each dimension its own 2D basis vector so no two vertices collide.
+    // bit 0 → +x, bit 1 → +y, bit 2 → small diagonal, bit 3 → smaller anti-diagonal.
+    const basis = [
+      { x: 1.0, y: 0.0 },
+      { x: 0.0, y: 1.0 },
+      { x: 0.45, y: 0.45 },
+      { x: 0.45, y: -0.45 }
+    ];
+    // Total extent for normalization.
+    let maxExt = 0;
+    for (let bit = 0; bit < d; bit++) maxExt += Math.abs(basis[bit].x) + 0;
+    setNodes((prev) => prev.map((node, i) => {
+      let x = 0, y = 0;
+      for (let bit = 0; bit < d; bit++) {
+        const set = (i >> bit) & 1 ? 1 : -1;
+        const b = basis[bit] || { x: 0, y: 0 };
+        x += set * b.x;
+        y += set * b.y;
+      }
+      const norm = Math.max(1, maxExt);
+      return { ...node, x: cx + (x / norm) * size * 0.9, y: cy + (y / norm) * size * 0.9 };
+    }));
+    setStatus("Applied cube layout");
+  };
   const applySpringLayout = () => {
     const n = nodes.length;
     if (n === 0) return;
@@ -777,6 +964,13 @@ function widget_graph_default(props) {
     }
     setNodes(currentNodes);
     setStatus("Applied force-directed layout");
+  };
+  const applyLayout = (name) => {
+    if (name === "circle") applyCircleLayout();
+    else if (name === "concentric") applyConcentricLayout();
+    else if (name === "hub") applyHubLayout();
+    else if (name === "cube") applyCubeLayout();
+    else if (name === "spring") applySpringLayout();
   };
   const clearGraph = () => {
     pushHistory();
@@ -1236,14 +1430,33 @@ function widget_graph_default(props) {
           e("option", { value: "subgraph" }, "Select Subgraph"),
           e("option", { value: "walk" }, "Select Walk")
         ]),
-        e("button", {
-          onClick: applyCircleLayout,
-          style: btnStyle
-        }, "Circle layout"),
-        e("button", {
-          onClick: applySpringLayout,
-          style: btnStyle
-        }, "Spring layout"),
+        e("select", {
+          value: "",
+          onChange: (ev) => { applyLayout(ev.target.value); ev.target.value = ""; },
+          style: {
+            border: "1px solid rgba(255, 255, 255, 0.12)",
+            background: "rgba(255, 255, 255, 0.06)",
+            color: "#e2e8f0",
+            padding: "7px 12px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            fontWeight: "500",
+            cursor: "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            paddingRight: "28px",
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "right 10px center"
+          }
+        }, [
+          e("option", { value: "" }, "Layout…"),
+          e("option", { value: "circle" }, "Circular"),
+          e("option", { value: "concentric" }, "Concentric"),
+          e("option", { value: "hub" }, "Hub"),
+          e("option", { value: "cube" }, "Cube"),
+          e("option", { value: "spring" }, "Spring")
+        ]),
         e("button", {
           onClick: () => setShowLabels(!showLabels),
           style: showLabels ? {
@@ -1314,6 +1527,33 @@ function widget_graph_default(props) {
         }, [
           e("option", { value: "simple" }, "Simple graph"),
           e("option", { value: "colored" }, "Bi-colored graph")
+        ]),
+        e("select", {
+          value: "",
+          onChange: (ev) => { applyLayout(ev.target.value); ev.target.value = ""; },
+          style: {
+            border: "1px solid rgba(255, 255, 255, 0.12)",
+            background: "rgba(255, 255, 255, 0.06)",
+            color: "#e2e8f0",
+            padding: "7px 12px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            fontWeight: "500",
+            cursor: "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            paddingRight: "28px",
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "right 10px center"
+          }
+        }, [
+          e("option", { value: "" }, "Layout…"),
+          e("option", { value: "circle" }, "Circular"),
+          e("option", { value: "concentric" }, "Concentric"),
+          e("option", { value: "hub" }, "Hub"),
+          e("option", { value: "cube" }, "Cube"),
+          e("option", { value: "spring" }, "Spring")
         ]),
         (!directed && !weighted) ? e("button", {
           onClick: () => {
