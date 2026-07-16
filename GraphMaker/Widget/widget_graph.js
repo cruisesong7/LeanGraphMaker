@@ -1176,6 +1176,7 @@ function widget_graph_default(props) {
       walkStart: selectMode === "walk" && walkPath.length >= 2 ? String(nodes.findIndex((nd) => nd.id === walkPath[0])) : "",
       walkEnd: selectMode === "walk" && walkPath.length >= 2 ? String(nodes.findIndex((nd) => nd.id === walkPath[walkPath.length - 1])) : "",
       graphIdent: props.graphIdent || "",
+      layout: props.layout || "",
       directed: directed,
       weighted: weighted,
       readOnly: false,
@@ -1193,8 +1194,10 @@ function widget_graph_default(props) {
       }
       setStatus("Graph sent to Lean successfully");
     }).catch((e2) => {
-      console.error(mapRpcError(e2));
-      setStatus("Error sending to Lean");
+      const mapped = mapRpcError(e2);
+      console.error(mapped);
+      const msg = (mapped && (mapped.message || mapped.toString())) || String(e2);
+      setStatus("Error sending to Lean: " + msg);
     });
   };
   const exportEdgeList = () => {
