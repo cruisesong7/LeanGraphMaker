@@ -8,7 +8,7 @@ set_option pp.rawOnError true
 #doc (Post) "Introducing GraphMaker: Interactive Graph Theory in Lean 4" =>
 
 %%%
-authors := ["Crusong"]
+authors := ["Cruise Song"]
 date := {year := 2026, month := 7, day := 24}
 %%%
 

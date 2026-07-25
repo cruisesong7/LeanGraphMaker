@@ -1,5 +1,4 @@
 import VersoBlog
-import GraphMakerBlog.Front
 import GraphMakerBlog.Blog
 import GraphMakerBlog.Posts.IntroducingGraphMaker
 
@@ -40,8 +39,7 @@ def theme : Theme := { Theme.default with
     }}
   }
 
-def graphMakerSite : Site := site GraphMakerBlog.Front /
-  "blog" GraphMakerBlog.Blog with
+def graphMakerSite : Site := site GraphMakerBlog.Blog with
     GraphMakerBlog.Posts.IntroducingGraphMaker
 
 def main := blogMain theme graphMakerSite
