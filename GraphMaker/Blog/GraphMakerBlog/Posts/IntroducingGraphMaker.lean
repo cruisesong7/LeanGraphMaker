@@ -1,5 +1,9 @@
 import VersoBlog
+import GraphMaker.DrawGraph
+import Mathlib.Combinatorics.SimpleGraph.Circulant
 open Verso Genre Blog
+
+set_option pp.rawOnError true
 
 #doc (Post) "Introducing GraphMaker: Interactive Graph Theory in Lean 4" =>
 
@@ -15,19 +19,25 @@ GraphMaker closes that loop with an interactive widget: draw the graph, and the
 tactic writes the Lean for you. Point it the other way, and any decidable graph
 renders as a picture in the infoview.
 
+```leanInit gm
+```
+
 # Drawing graphs with `draw_graph`
 
 Invoking the `draw_graph` tactic opens a canvas in the infoview. Click to place
 vertices, click two vertices to connect them, and press *Send to Lean* — the
-widget replaces the tactic invocation with a `let` binding for the graph you drew:
+widget replaces the tactic invocation with a `let` binding for the graph you drew.
+The result is ordinary, checkable Lean:
 
-```
-let G := Matrix.toSimpleGraph !![
-  0, 1, 0, 0, 1;
-  1, 0, 1, 0, 0;
-  0, 1, 0, 1, 0;
-  0, 0, 1, 0, 1;
-  1, 0, 0, 1, 0]
+```lean gm
+example : True := by
+  let G := Matrix.toSimpleGraph !![
+    0, 1, 0, 0, 1;
+    1, 0, 1, 0, 0;
+    0, 1, 0, 1, 0;
+    0, 0, 1, 0, 1;
+    1, 0, 0, 1, 0]
+  trivial
 ```
 
 The constructor `Matrix.toSimpleGraph` carries its well-formedness proof by
@@ -45,7 +55,7 @@ canvas are emitted as `Walk.cons … (by decide)` chains and
 `DecidableRel` adjacency instance, the tactic evaluates the adjacency relation
 and renders it — including graphs mathlib defines abstractly:
 
-```
+```lean gm
 example : True := by
   let G := (SimpleGraph.cycleGraph 5)ᶜ
   draw_graph G   -- renders the complement of C₅
