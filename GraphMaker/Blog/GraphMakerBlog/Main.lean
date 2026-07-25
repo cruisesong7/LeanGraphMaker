@@ -5,12 +5,7 @@ open Verso Genre Blog
 
 set_option pp.rawOnError true
 
-#doc (Post) "Introducing GraphMaker: Interactive Graph Theory in Lean 4" =>
-
-%%%
-authors := ["Cruise Song"]
-date := {year := 2026, month := 7, day := 24}
-%%%
+#doc (Page) "GraphMaker: Interactive Graph Theory in Lean 4" =>
 
 Formal graph theory has a bootstrapping problem: before you can prove anything
 about a concrete graph, you have to *write it down* — as an adjacency matrix, an
