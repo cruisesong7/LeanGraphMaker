@@ -92,7 +92,11 @@ end WeightedDigraph
 /-! ## Example: find a directed path from 0 to 3 with weight < 8
 
 Directed graph: 0→1 (w=3), 0→2 (w=5), 1→2 (w=2), 1→3 (w=4), 2→3 (w=1).
-Path 0→1→2→3 has weight 3+2+1 = 6 < 8. -/
+Path 0→1→2→3 has weight 3+2+1 = 6 < 8.
+
+Cursor on `draw_graph G` to visualize. To build the path interactively: choose
+"Select Walk" from the mode dropdown, click vertices 0, 1, 2, 3 in order, then
+"Send to Lean" to fill in the walk `p`. -/
 
 /-! ### Directed graph example -/
 
@@ -103,7 +107,8 @@ example : let G := (Matrix.toWeightedDigraph !![0, 3, 5, 0;
     (0 : ℕ), 0, 0, 0])
   G.HasPathLt 0 3 8 := by
   intro G
-  --draw_graph G
+  -- TODO: uncomment `draw_graph G` to open the widget (leave the `let p` below).
+  -- draw_graph G
   let p : G.Walk 0 3 := Walk.cons (v := 1) (by decide) (Walk.cons (v := 2) (by decide)
     (Walk.cons (v := 3) (by decide) Walk.nil))
   exact ⟨p, by decide⟩
@@ -117,6 +122,7 @@ example : let G := (Matrix.toWeightedSimpleGraph !![0, 3, 5, 0;
     (0 : ℕ), 4, 1, 0])
   ∃ (p : G.toSimpleGraph.Walk 0 3), G.walkWeight p < 7 := by
   intro G
-  --draw_graph G
+  -- TODO: uncomment `draw_graph G` to open the widget (leave the `let p` below).
+  -- draw_graph G
   let p : G.toSimpleGraph.Walk 0 3 := SimpleGraph.Walk.cons (u := 0) (v := 1) (by decide) (SimpleGraph.Walk.cons (u := 1) (v := 2) (by decide) (SimpleGraph.Walk.cons (u := 2) (v := 3) (by decide) (SimpleGraph.Walk.nil)))
   exact ⟨p, by decide⟩

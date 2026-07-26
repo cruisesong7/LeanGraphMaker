@@ -54,6 +54,9 @@ structure GraphWidgetProps where
   directed : Bool := false
   weighted : Bool := false
   readOnly : Bool := false
+  /-- When set, "Send to Lean" emits a top-level `def` (used by the `#draw_graph`
+      command) rather than a `let` binding (used by the `draw_graph` tactic). -/
+  topLevel : Bool := false
   initialMatrix : Array (Array Nat) := #[]
   replaceRange : Lsp.Range
   deriving Server.RpcEncodable
@@ -83,17 +86,23 @@ def graphWidget.updateGraph (props : GraphWidgetProps) : RequestM (RequestTask M
       else
         s!"{graphName}.toSimpleGraph.Walk {props.walkStart} {props.walkEnd}"
 
+    -- The tactic emits `let` bindings inside a proof; the `#draw_graph` command
+    -- emits a top-level `def`. Walks/subgraphs are proof-context only, so the
+    -- top-level path just writes the graph definition.
+    let kw := if props.topLevel then "def" else "let"
     let newLeanText :=
-      if hasWalk then
+      if props.topLevel then
+        if graphChanged then s!"def {graphName} := {constructor} {props.adjMatrix}" else ""
+      else if hasWalk then
         if graphChanged then
-          s!"let {graphName} := {constructor} {props.adjMatrix}\n{indent}let p : {walkType} := {props.walkExpr}"
+          s!"{kw} {graphName} := {constructor} {props.adjMatrix}\n{indent}let p : {walkType} := {props.walkExpr}"
         else
           s!"let p : {walkType} := {props.walkExpr}"
       else match graphChanged, hasSubgraph with
       | false, false => ""
       | false, true  => s!"let G' := {subgraphExpr}"
-      | true,  false => s!"let {graphName} := {constructor} {props.adjMatrix}"
-      | true,  true  => s!"let {graphName} := {constructor} {props.adjMatrix}\n{indent}let G' := {subgraphExpr}"
+      | true,  false => s!"{kw} {graphName} := {constructor} {props.adjMatrix}"
+      | true,  true  => s!"{kw} {graphName} := {constructor} {props.adjMatrix}\n{indent}let G' := {subgraphExpr}"
 
     let editLinkProps : MakeEditLinkProps := .ofReplaceRange doc.meta props.replaceRange newLeanText
     return editLinkProps
@@ -331,6 +340,83 @@ syntax (name := drawGraphTac) "draw_graph" (colGt ident)? : tactic
   let identName := if !stx[1].isNone then stx[1][0].getId.toString else ""
   showGraphWidget stx replaceRange rows directed weighted
     (graphIdent := identName) (layout := layout)
+
+/-! ## `#view_graph` / `#draw_graph` commands
+
+Top-level commands to visualize (`#view_graph`) or author (`#draw_graph`) a graph
+without the `example : True := by … trivial` proof scaffolding needed by the
+`draw_graph` tactic. `#view_graph` renders read-only; `#draw_graph`'s "Send to
+Lean" replaces the command with a top-level `def`. -/
+
+open Elab.Command in
+/-- Shared implementation: elaborate `t?` (if given) to a graph, extract its
+    adjacency matrix, and save the widget on `stx`. `readOnly`/`topLevel` select
+    viewer vs. authoring behaviour. -/
+def showGraphCommand (stx : Syntax) (t? : Option Term)
+    (readOnly topLevel : Bool) : CommandElabM Unit := do
+  let fm ← getFileMap
+  let some replaceRange := lspRangeOfStx? fm stx false | return
+  -- Prefer a bare identifier as the graph/def name; otherwise default to `G`.
+  let identName := match t? with
+    | some t => if t.raw.isIdent then t.raw.getId.toString else ""
+    | none => ""
+  let mut rows : Array (Array Nat) := #[]
+  let mut directed := false
+  let mut weighted := false
+  let mut layout := ""
+  if let some t := t? then
+    (rows, directed, weighted, layout) ← liftTermElabM do
+      let e ← Term.elabTerm t none
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let e ← instantiateMVars e
+      -- Layout is read from the head constant before `whnf` unfolds it.
+      let headName := e.getAppFn.constName?.getD .anonymous
+      let layout := (getGraphLayout (← getEnv) headName).getD ""
+      let val ← do
+        let rs ← extractMatrixFromExpr e
+        if rs.size > 0 then pure e else whnf e
+      let (d, w) ← classifyGraphType val
+      let rows ← extractMatrixFromExpr val
+      pure (rows, d, w, layout)
+  let props : GraphWidgetProps :=
+    { adjMatrix := if readOnly then
+        let rowStrs := rows.map fun row =>
+          String.intercalate ", " (row.toList.map toString)
+        "!![" ++ String.intercalate ";\n    " rowStrs.toList ++ "]"
+      else ""
+      «graphIdent» := identName
+      «layout» := layout
+      «directed» := directed
+      «weighted» := weighted
+      «readOnly» := readOnly
+      «topLevel» := topLevel
+      initialMatrix := rows
+      replaceRange := replaceRange }
+  liftCoreM <| Widget.savePanelWidgetInfo graphWidget.javascriptHash (rpcEncode props) stx
+
+/-- `#view_graph t` renders the graph `t` read-only in the infoview. Accepts any
+    `SimpleGraph`/`Digraph`/weighted graph over `Fin n` with a `DecidableRel`
+    adjacency instance, an adjacency matrix, or a `graph6` string — no proof
+    context required. -/
+syntax (name := viewGraphCmd) "#view_graph " term : command
+
+open Elab.Command in
+@[command_elab viewGraphCmd]
+def elabViewGraph : CommandElab := fun
+  | stx@`(#view_graph $t:term) => showGraphCommand stx (some t) (readOnly := true) (topLevel := false)
+  | _ => throwUnsupportedSyntax
+
+/-- `#draw_graph` opens the interactive editor as a top-level command. With a
+    term argument the canvas is pre-populated with that graph; without one you
+    draw from scratch. "Send to Lean" replaces the command with a top-level
+    `def` for the graph you drew. -/
+syntax (name := drawGraphCmd) "#draw_graph" (ppSpace term)? : command
+
+open Elab.Command in
+@[command_elab drawGraphCmd]
+def elabDrawGraph : CommandElab := fun
+  | stx@`(#draw_graph $[$t?:term]?) => showGraphCommand stx t? (readOnly := false) (topLevel := true)
+  | _ => throwUnsupportedSyntax
 
 /-! ## Graph expression presenter (shift-click to visualize) -/
 

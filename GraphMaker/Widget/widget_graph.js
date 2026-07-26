@@ -167,7 +167,53 @@ function layoutNodes(nodes, edges, name, W = 600, H = 400) {
       return { ...nd, x: cx + (x / norm) * R * 0.9, y: cy + (y / norm) * R * 0.9 };
     });
   }
-  return nodes;  // spring / unknown → leave as-is (handled interactively)
+  if (name === "spring") {
+    // Deterministic force-directed refinement. Starts from the nodes' current
+    // (circular) positions and applies Fruchterman–Reingold, so the result is
+    // reproducible — no randomness. Used to reduce edge crossings for graphs
+    // with no registered layout (e.g. cex_graph counterexamples).
+    const area = W * H;
+    const k = Math.sqrt(area / (n + 1e-3));
+    let temperature = Math.min(W, H) / 8;
+    const cur = nodes.map((nd) => ({ ...nd }));
+    const idToIndex = new Map(cur.map((node, i) => [node.id, i]));
+    for (let iter = 0; iter < 250; iter++) {
+      const disp = cur.map(() => ({ x: 0, y: 0 }));
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = cur[j].x - cur[i].x;
+          const dy = cur[j].y - cur[i].y;
+          const dist = Math.hypot(dx, dy) + 0.01;
+          const force = k * k / dist;
+          disp[i].x -= force * dx / dist; disp[i].y -= force * dy / dist;
+          disp[j].x += force * dx / dist; disp[j].y += force * dy / dist;
+        }
+      }
+      edges.forEach(({ color }, key) => {
+        if (color !== "red") return;
+        const [aId, bId] = key.split("-").map(Number);
+        const i = idToIndex.get(aId);
+        const j = idToIndex.get(bId);
+        if (i === void 0 || j === void 0) return;
+        const dx = cur[j].x - cur[i].x;
+        const dy = cur[j].y - cur[i].y;
+        const dist = Math.hypot(dx, dy) + 0.01;
+        const force = dist * dist / k;
+        disp[i].x += force * dx / dist; disp[i].y += force * dy / dist;
+        disp[j].x -= force * dx / dist; disp[j].y -= force * dy / dist;
+      });
+      for (let i = 0; i < n; i++) {
+        const dist = Math.hypot(disp[i].x, disp[i].y) || 1;
+        const limited = Math.min(temperature, dist);
+        cur[i].x = clamp(cur[i].x + disp[i].x / dist * limited, 20, W - 20);
+        cur[i].y = clamp(cur[i].y + disp[i].y / dist * limited, 20, H - 20);
+      }
+      temperature *= 0.95;
+      if (temperature < 0.5) break;
+    }
+    return cur;
+  }
+  return nodes;  // unknown → leave as-is (handled interactively)
 }
 
 function initFromMatrix(matrix, canvasWidth, canvasHeight, isDirected, bicolored) {
@@ -233,7 +279,7 @@ function widget_graph_default(props) {
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
   const dragHistorySavedRef = React.useRef(false);
-  const [showLabels, setShowLabels] = React.useState(false);
+  const [showLabels, setShowLabels] = React.useState(true);
   const [selectedEdgeId, setSelectedEdgeId] = React.useState(null);
   const edgeTypingRef = React.useRef(false);
   const prevSelectedEdgeRef = React.useRef(null);
@@ -560,15 +606,14 @@ function widget_graph_default(props) {
     return closest;
   };
   const addNode = (x, y) => {
+    // Don't create nodes too close to existing ones (2 * visual radius)
+    for (const node of nodes) {
+      if (Math.hypot(node.x - x, node.y - y) < 44) return;
+    }
     pushHistory();
-    setNodes((prev) => {
-      // Don't create nodes too close to existing ones (2 * visual radius)
-      for (const node of prev) {
-        if (Math.hypot(node.x - x, node.y - y) < 44) return prev;
-      }
-      const nextId = prev.length > 0 ? Math.max(...prev.map((n) => n.id)) + 1 : 0;
-      return [...prev, { id: nextId, x, y }];
-    });
+    const nextId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 0;
+    const newNode = { id: nextId, x, y };
+    setNodes((prev) => [...prev, newNode]);
     if (graphMode === "colored") {
       setEdges((prev) => {
         const newEdges = new Map(prev);
@@ -778,6 +823,14 @@ function widget_graph_default(props) {
         const edge = edges.get(edgeKey);
         const w = edge && edge.weight !== undefined ? edge.weight : 1;
         setStatus(`Selected edge ${edgeKey} (weight: ${w}) — type a number to change`);
+      } else if (selectedNodeId !== null || selectedEdgeId !== null) {
+        // Empty-canvas click with something selected: deselect it rather than
+        // creating a node. Lets the user dismiss a selection (and trigger the
+        // weight-0 edge cleanup) without spawning a stray vertex.
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+        edgeTypingRef.current = false;
+        setStatus("Deselected");
       } else {
         addNode(x, y);
         setSelectedEdgeId(null);

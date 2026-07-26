@@ -6,11 +6,14 @@ import Mathlib.Combinatorics.SimpleGraph.Circulant
 
 Standard graphs that mathlib does not define, constructed as adjacency matrices
 over `Fin n` so they carry `DecidableRel` instances and can be visualized with
-`draw_graph` and verified with `decide`.
+`#view_graph` / `draw_graph` and verified with `decide`.
 
-`draw_graph` also renders mathlib's own decidable families directly (e.g.
+To *view* a graph, use the top-level `#view_graph` command — no proof context
+needed. It renders mathlib's own decidable families directly too (e.g.
 `cycleGraph n`, `completeGraph`/`⊤`, `circulantGraph s`, graph complements) by
-evaluating the adjacency relation — see the examples at the bottom.
+evaluating the adjacency relation. Put the cursor on the command to see the
+widget. Use the `draw_graph` tactic instead when you want to construct or edit a
+graph inside a proof.
 -/
 
 namespace NamedGraphs
@@ -50,41 +53,16 @@ end NamedGraphs
 
 /-! ## Examples: visualization
 
-Place the cursor on `draw_graph` (or shift-click the graph in the infoview). -/
+Place the cursor on a `#view_graph` command to render it in the infoview. -/
 
-open NamedGraphs in
-example : True := by
-  let G := petersenGraph 5 2   -- standard Petersen graph
-  draw_graph G
-  trivial
+open NamedGraphs
 
-open NamedGraphs in
-example : True := by
-  let G := wheelGraph 5         -- W₅
-  draw_graph G
-  trivial
-
-open NamedGraphs in
-example : True := by
-  draw_graph hypercube₃       -- Q₃
-  trivial
+#view_graph petersenGraph 5 2   -- standard Petersen graph
+#view_graph wheelGraph 5         -- W₅
+#view_graph hypercube₃           -- Q₃
 
 /-! ## Examples: mathlib's decidable families render directly -/
 
--- Cycle graph C₅ (from mathlib's Circulant)
-example : True := by
-  let G := SimpleGraph.cycleGraph 5
-  draw_graph G
-  trivial
-
--- Complete graph K₄ (⊤ on Fin 4)
-example : True := by
-  let G : SimpleGraph (Fin 4) := ⊤
-  draw_graph G
-  trivial
-
--- Complement of the cycle C₅
-example : True := by
-  let G := (SimpleGraph.cycleGraph 5)ᶜ
-  draw_graph G
-  trivial
+#view_graph SimpleGraph.cycleGraph 5          -- cycle graph C₅
+#view_graph (⊤ : SimpleGraph (Fin 4))         -- complete graph K₄
+#view_graph (SimpleGraph.cycleGraph 5)ᶜ       -- complement of C₅
