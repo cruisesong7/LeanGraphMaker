@@ -200,6 +200,6 @@ syntax (name := cexGraphTac) "cex_graph" : tactic
       admitGoal (← getMainGoal)
     else
       let matStr := formatMatrix mat
-      showGraphWidget stx replaceRange mat
+      showGraphWidget stx replaceRange mat (readOnly := true) (layout := "spring")
       logInfo s!"Found counterexample!\n  let G := Matrix.toSimpleGraph {matStr}"
       admitGoal (← getMainGoal)

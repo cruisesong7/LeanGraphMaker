@@ -40,8 +40,10 @@ end WeightedSimpleGraph
 
 /-! ## Example: find a spanning tree with weight < 10
 
-Use `draw_graph G` to visualize the graph, then select edges for a spanning tree
-using subgraph selection mode: edges 0-1 (w=3), 1-2 (w=2), 2-3 (w=1) → total = 6 < 10 -/
+Cursor on `draw_graph G` to visualize the graph. To pick the spanning tree
+interactively: choose "Select Subgraph" from the mode dropdown, click the tree
+edges — 0-1 (w=3), 1-2 (w=2), 2-3 (w=1), total = 6 < 10 — then "Send to Lean" to
+fill in `G'`. Click empty space to deselect. -/
 
 open WeightedSimpleGraph in
 example : let G := (Matrix.toWeightedSimpleGraph !![0, 3, 5, 0;
@@ -50,6 +52,7 @@ example : let G := (Matrix.toWeightedSimpleGraph !![0, 3, 5, 0;
     (0 : ℕ), 4, 1, 0])
   G.HasSpanningTreeLt 10 := by
   intro G
+  -- TODO: uncomment `draw_graph G` to open the widget (leave the `let G'` below).
   -- draw_graph G
   let G' := G.subgraphOfMatrix !![
       0, 1, 0, 0;
